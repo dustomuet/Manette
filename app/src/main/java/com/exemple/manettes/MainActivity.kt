@@ -170,11 +170,12 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
 
     private fun gamepads(): List<InputDevice> {
         return InputDevice.getDeviceIds()
-            .mapNotNull { InputDevice.getDevice(it) }
-            .filter {
-                !it.isVirtual &&
-                    ((it.sources and InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD ||
-                        (it.sources and InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK)
+            .toList()
+            .mapNotNull { id -> InputDevice.getDevice(id) }
+            .filter { dev ->
+                !dev.isVirtual &&
+                    ((dev.sources and InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD ||
+                        (dev.sources and InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK)
             }
     }
 
