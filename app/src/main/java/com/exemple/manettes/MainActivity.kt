@@ -1,4 +1,4 @@
-package com.dustomuet.manettes
+package com.exemple.manettes
 
 import android.app.Activity
 import android.bluetooth.BluetoothAdapter
@@ -15,7 +15,6 @@ import android.graphics.Paint
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.hardware.input.InputManager
-import android.hardware.lights.LightsManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -36,7 +35,6 @@ import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
-import java.util.concurrent.Executors
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -1176,24 +1174,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
             setColor(colorInt)
             cornerRadius = dp(10).toFloat()
         }
-
-        var appliedHardware = false
-        if (Build.VERSION.SDK_INT >= 31) {
-            try {
-                val lm = getSystemService(Context.LIGHTS_SERVICE) as? LightsManager
-                val lights = lm?.lights
-                if (lights != null && lights.isNotEmpty()) {
-                    appliedHardware = true
-                }
-            } catch (_: Exception) {
-            }
-        }
-
-        ledStatusText.text = if (appliedHardware) {
-            "Couleur : $name (#${Integer.toHexString(colorInt).uppercase()}) – LED détectée"
-        } else {
-            "Couleur : $name (#${Integer.toHexString(colorInt).uppercase()}) – Aperçu glace actif"
-        }
+        ledStatusText.text = "Couleur : $name (#${Integer.toHexString(colorInt).uppercase()}) – Aperçu glace actif"
         logEvent("LED -> $name")
     }
 
