@@ -31,7 +31,6 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
     private lateinit var seekL: SeekBar
     private lateinit var seekR: SeekBar
 
-    // Valeurs brutes lues sur la manette
     private var rawLX = 0f
     private var rawLY = 0f
     private var rawRX = 0f
@@ -41,7 +40,6 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
     private var hatX = 0f
     private var hatY = 0f
 
-    // Calibration (décalage au repos) et zones mortes en %
     private var offLX = 0f
     private var offLY = 0f
     private var offRX = 0f
@@ -170,8 +168,6 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         }
     }
 
-    // ---------- Manettes connectées ----------
-
     private fun gamepads(): List<InputDevice> {
         return InputDevice.getDeviceIds()
             .mapNotNull { InputDevice.getDevice(it) }
@@ -199,15 +195,12 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
                         sb.append(" – batterie ").append((b.capacity * 100).toInt()).append(" %")
                     }
                 } catch (e: Exception) {
-                    // batterie non disponible
                 }
             }
             sb.append("\n")
         }
         devicesText.text = sb.toString().trimEnd()
     }
-
-    // ---------- Lecture des entrées ----------
 
     override fun dispatchGenericMotionEvent(ev: MotionEvent): Boolean {
         if ((ev.source and InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK &&
@@ -265,9 +258,6 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         hatY = ev.getAxisValue(MotionEvent.AXIS_HAT_Y)
     }
 
-    // ---------- Correction du drift ----------
-
-    // Retire le décalage au repos, puis applique une zone morte circulaire.
     private fun corriger(x: Float, y: Float, ox: Float, oy: Float, dzPercent: Int): Pair<Float, Float> {
         val dz = dzPercent / 100f
         val ax = x - ox
@@ -309,8 +299,6 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         refresh()
     }
 
-    // ---------- Vibration ----------
-
     private fun vibrer() {
         val d = gamepads().firstOrNull()
         if (d == null) {
@@ -330,8 +318,6 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
             Toast.makeText(this, "Vibration non disponible", Toast.LENGTH_SHORT).show()
         }
     }
-
-    // ---------- Affichage ----------
 
     private fun f(v: Float): String = String.format("%+.2f", v)
 
