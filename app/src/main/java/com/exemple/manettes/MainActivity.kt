@@ -5,6 +5,8 @@ import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothHidDevice
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.SharedPreferences
 import android.content.res.ColorStateList
@@ -20,6 +22,9 @@ import android.graphics.Shader
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.hardware.input.InputManager
+import android.media.AudioAttributes
+import android.media.AudioFormat
+import android.media.AudioTrack
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -42,12 +47,14 @@ import android.widget.SeekBar
 import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
+import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.math.sqrt
 import kotlin.random.Random
@@ -58,7 +65,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
     private val glassFill = Color.argb(195, 22, 16, 20)
     private val glassFillLight = Color.argb(215, 34, 22, 28)
     private val glassEdge = Color.argb(145, 255, 195, 205)
-    private val crimsonGlow = Color.parseColor("#FF2A3C")
+    private var crimsonGlow = Color.parseColor("#FF2A3C")
     private val mintOnline = Color.parseColor("#35F27E")
     private val iceCyan = Color.parseColor("#4CE8FF")
     private val iceGold = Color.parseColor("#FFC95C")
@@ -72,46 +79,133 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
     private var btBridgeEnabled = false
     private var targetConsoleMode = "PLAYSTATION"
 
+    // Profils, courbes, gâchettes & options avancées
+    private val presetProfiles = listOf("FPS", "COURSE", "ARCADE")
+    private var activePresetName = "FPS"
+    private var stickCurveMode = "PRECIS" // LINEAIRE, PRECIS, RAPIDE
+    private var invertLookY = false
+    private var hairTriggerEnabled = true
+    private var lockProfileToPad = true
+    private var turboEnabled = false
+    private var synthAudioEnabled = true
+    private var ecoDarkMode = false
+
+    // Duel à 2 joueurs (Pass & Play) & Comparaison Manette A vs B
+    private var duelModeActive = false
+    private var duelPlayerTurn = 1
+    private var duelP1Kills = 0
+    private var duelP2Kills = 0
+    private var snapshotPadA: String = "Aucun relevé"
+    private var snapshotPadB: String = "Aucun relevé"
+
+    // Latence, régularité sticks & détection boutons fantômes
+    private var lastInputEventMs = 0L
+    private var lastLatencyMs = 0L
+    private var jitterAccumulator = 0f
+    private var jitterSamples = 0
+    private var lastDirAngleL = 0.0
+    private var hasPrevAngleL = false
+    private var ghostInputCount = 0
+
+    // Armes, arènes & modes de bots dans DUSTØ OPS 3D
+    private val weaponModes = listOf("ASSAUT", "RAFALE", "LOURD")
+    private var currentWeaponIndex = 0
+    private val botModes = listOf("AGRESSIF", "PATROUILLE", "ENTRAINEMENT")
+    private var currentBotModeIndex = 0
+    private val arenaNames = listOf("BUNKER ROUGE", "LABYRINTHE NÉON", "ENTREPÔT TACTIQUE")
+    private var currentArenaIndex = 0
+
+    private val mapsByArena = listOf(
+        arrayOf(
+            intArrayOf(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+            intArrayOf(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1),
+            intArrayOf(1, 0, 0, 0, 2, 0, 0, 2, 0, 0, 0, 1),
+            intArrayOf(1, 0, 0, 0, 2, 0, 0, 2, 0, 0, 0, 1),
+            intArrayOf(1, 0, 2, 2, 2, 0, 0, 0, 0, 3, 0, 1),
+            intArrayOf(1, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 1),
+            intArrayOf(1, 0, 0, 3, 0, 0, 0, 3, 3, 3, 0, 1),
+            intArrayOf(1, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 1),
+            intArrayOf(1, 0, 0, 0, 0, 2, 0, 0, 2, 0, 0, 1),
+            intArrayOf(1, 0, 2, 0, 0, 2, 0, 0, 2, 0, 0, 1),
+            intArrayOf(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1),
+            intArrayOf(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1)
+        ),
+        arrayOf(
+            intArrayOf(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+            intArrayOf(1, 0, 0, 3, 0, 0, 0, 0, 3, 0, 0, 1),
+            intArrayOf(1, 0, 3, 3, 0, 2, 2, 0, 3, 3, 0, 1),
+            intArrayOf(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1),
+            intArrayOf(1, 0, 2, 0, 3, 0, 0, 3, 0, 2, 0, 1),
+            intArrayOf(1, 0, 2, 0, 0, 0, 0, 0, 0, 2, 0, 1),
+            intArrayOf(1, 0, 0, 0, 3, 0, 0, 3, 0, 0, 0, 1),
+            intArrayOf(1, 0, 3, 3, 0, 2, 2, 0, 3, 3, 0, 1),
+            intArrayOf(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1),
+            intArrayOf(1, 0, 2, 3, 0, 0, 0, 0, 3, 2, 0, 1),
+            intArrayOf(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1),
+            intArrayOf(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1)
+        ),
+        arrayOf(
+            intArrayOf(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+            intArrayOf(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1),
+            intArrayOf(1, 0, 2, 2, 0, 0, 0, 0, 2, 2, 0, 1),
+            intArrayOf(1, 0, 2, 0, 0, 1, 1, 0, 0, 2, 0, 1),
+            intArrayOf(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1),
+            intArrayOf(1, 0, 0, 3, 0, 2, 2, 0, 3, 0, 0, 1),
+            intArrayOf(1, 0, 0, 3, 0, 2, 2, 0, 3, 0, 0, 1),
+            intArrayOf(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1),
+            intArrayOf(1, 0, 2, 0, 0, 1, 1, 0, 0, 2, 0, 1),
+            intArrayOf(1, 0, 2, 2, 0, 0, 0, 0, 2, 2, 0, 1),
+            intArrayOf(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1),
+            intArrayOf(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1)
+        )
+    )
+
+    private fun currentWorldMap(): Array<IntArray> = mapsByArena[currentArenaIndex]
+
+    private enum class BotRole { RUSHER, SNIPER, TANK }
+
+    private data class EnemyBot(
+        var x: Double,
+        var y: Double,
+        var hp: Int,
+        var maxHp: Int,
+        var role: BotRole,
+        var moveAngle: Double,
+        var lastAttackMs: Long
+    )
+
+    private data class MedKit(var x: Double, var y: Double, var active: Boolean = true)
+
+    private val enemyBots = mutableListOf<EnemyBot>()
+    private val medKits = mutableListOf<MedKit>()
+    private val killFeed = ArrayDeque<String>(5)
+
     private val gameHandler = Handler(Looper.getMainLooper())
     private var fpsActive = false
     private var fpsKills = 0
+    private var streakKills = 0
     private var fpsWave = 1
     private var fpsShots = 0
     private var fpsHits = 0
+    private var fpsHeadshots = 0
+    private var bestKills = 0
+    private var bestWave = 1
     private var playerHealth = 100
+    private var weaponHeat = 0f // 0..100
+    private var weaponOverheated = false
+    private var focusCharge = 100f // 0..100
+    private var slowMoUntil = 0L
     private var playerX = 2.5
     private var playerY = 2.5
     private var playerAngle = 0.0
     private var weaponRecoil = 0f
     private var muzzleFlashUntil = 0L
     private var hitMarkerUntil = 0L
+    private var headshotMarkerUntil = 0L
     private var damageFlashUntil = 0L
     private var lastShotTimeMs = 0L
-
-    private val worldMap = arrayOf(
-        intArrayOf(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
-        intArrayOf(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1),
-        intArrayOf(1, 0, 0, 0, 2, 0, 0, 2, 0, 0, 0, 1),
-        intArrayOf(1, 0, 0, 0, 2, 0, 0, 2, 0, 0, 0, 1),
-        intArrayOf(1, 0, 2, 2, 2, 0, 0, 0, 0, 3, 0, 1),
-        intArrayOf(1, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 1),
-        intArrayOf(1, 0, 0, 3, 0, 0, 0, 3, 3, 3, 0, 1),
-        intArrayOf(1, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 1),
-        intArrayOf(1, 0, 0, 0, 0, 2, 0, 0, 2, 0, 0, 1),
-        intArrayOf(1, 0, 2, 0, 0, 2, 0, 0, 2, 0, 0, 1),
-        intArrayOf(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1),
-        intArrayOf(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1)
-    )
-
-    private data class EnemyBot(
-        var x: Double,
-        var y: Double,
-        var hp: Int,
-        var moveAngle: Double,
-        var lastAttackMs: Long
-    )
-
-    private val enemyBots = mutableListOf<EnemyBot>()
+    private var lastHeartbeatMs = 0L
+    private var lastTurboMs = 0L
 
     private var currentNavIndex = 0
     private val navItems = mutableListOf<LinearLayout>()
@@ -176,7 +270,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
     private var vibrationEnabled = true
     private var vibAmplitude = 210
     private var vibDurationMs = 300
-    private var selectedLedColor = crimsonGlow
+    private var selectedLedColor = Color.parseColor("#FF2A3C")
     private var selectedLedName = "ROUGE DUSTØ"
 
     private val pressed = linkedSetOf<String>()
@@ -206,16 +300,19 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
     private fun glassCardDrawable(radiusDp: Int = 22, borderColor: Int = glassEdge, fillColor: Int = glassFill): GradientDrawable {
+        val effectiveFill = if (ecoDarkMode) Color.argb(235, 10, 9, 12) else fillColor
+        val effectiveBorder = if (ecoDarkMode) Color.argb(75, 160, 140, 148) else borderColor
         return GradientDrawable().apply {
-            setColor(fillColor)
+            setColor(effectiveFill)
             cornerRadius = dp(radiusDp).toFloat()
-            setStroke(dp(1), borderColor)
+            setStroke(dp(1), effectiveBorder)
         }
     }
 
     private fun actionButtonDrawable(strokeColor: Int = crimsonGlow, fillColor: Int = glassFillLight): GradientDrawable {
+        val effectiveFill = if (ecoDarkMode) Color.argb(235, 14, 12, 16) else fillColor
         return GradientDrawable().apply {
-            setColor(fillColor)
+            setColor(effectiveFill)
             cornerRadius = dp(14).toFloat()
             setStroke(dp(1), strokeColor)
         }
@@ -250,6 +347,16 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
             @Suppress("DEPRECATION")
             BluetoothAdapter.getDefaultAdapter()
         }
+
+        bestKills = prefs.getInt("bestKills", 0)
+        bestWave = prefs.getInt("bestWave", 1)
+        activePresetName = prefs.getString("activePreset", "FPS") ?: "FPS"
+        stickCurveMode = prefs.getString("stickCurve", "PRECIS") ?: "PRECIS"
+        invertLookY = prefs.getBoolean("invertLookY", false)
+        hairTriggerEnabled = prefs.getBoolean("hairTrigger", true)
+        lockProfileToPad = prefs.getBoolean("lockProfileToPad", true)
+        synthAudioEnabled = prefs.getBoolean("synthAudio", true)
+        ecoDarkMode = prefs.getBoolean("ecoDarkMode", false)
 
         dzL = prefs.getInt("dzL", 10)
         dzR = prefs.getInt("dzR", 10)
@@ -326,6 +433,99 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         refresh()
     }
 
+    private fun playSynthTone(freqHz: Double, durationMs: Int, volume: Float = 0.28f) {
+        if (!synthAudioEnabled || ecoDarkMode) return
+        Thread {
+            try {
+                val sampleRate = 22050
+                val count = max(1, (sampleRate * durationMs) / 1000)
+                val samples = ShortArray(count)
+                for (i in 0 until count) {
+                    val env = 1.0 - (i.toDouble() / count)
+                    val wave = sin(2.0 * PI * freqHz * i / sampleRate)
+                    samples[i] = (wave * env * volume * Short.MAX_VALUE).toInt()
+                        .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+                }
+                val track = if (Build.VERSION.SDK_INT >= 21) {
+                    AudioTrack.Builder()
+                        .setAudioAttributes(
+                            AudioAttributes.Builder()
+                                .setUsage(AudioAttributes.USAGE_GAME)
+                                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                                .build()
+                        )
+                        .setAudioFormat(
+                            AudioFormat.Builder()
+                                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                                .setSampleRate(sampleRate)
+                                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                                .build()
+                        )
+                        .setBufferSizeInBytes(samples.size * 2)
+                        .setTransferMode(AudioTrack.MODE_STATIC)
+                        .build()
+                } else {
+                    @Suppress("DEPRECATION")
+                    AudioTrack(
+                        android.media.AudioManager.STREAM_MUSIC,
+                        sampleRate,
+                        AudioFormat.CHANNEL_OUT_MONO,
+                        AudioFormat.ENCODING_PCM_16BIT,
+                        samples.size * 2,
+                        AudioTrack.MODE_STATIC
+                    )
+                }
+                track.write(samples, 0, samples.size)
+                track.play()
+                Thread.sleep((durationMs + 25).toLong())
+                track.release()
+            } catch (_: Exception) {
+            }
+        }.start()
+    }
+
+    private fun applyPresetProfile(preset: String) {
+        activePresetName = preset
+        prefs.edit().putString("activePreset", preset).apply()
+        if (lockProfileToPad) {
+            prefs.edit().putString("${activeProfileKey()}_preset", preset).apply()
+        }
+        when (preset) {
+            "FPS" -> {
+                dzL = 8; dzR = 6; stickCurveMode = "PRECIS"; hairTriggerEnabled = true
+            }
+            "COURSE" -> {
+                dzL = 5; dzR = 12; stickCurveMode = "LINEAIRE"; hairTriggerEnabled = false
+            }
+            else -> {
+                dzL = 10; dzR = 10; stickCurveMode = "RAPIDE"; hairTriggerEnabled = true
+            }
+        }
+        prefs.edit()
+            .putInt("dzL", dzL).putInt("dzR", dzR)
+            .putString("stickCurve", stickCurveMode)
+            .putBoolean("hairTrigger", hairTriggerEnabled).apply()
+        if (::seekL.isInitialized) {
+            seekL.progress = dzL; seekR.progress = dzR
+            labelL.text = "Zone morte gauche : $dzL %"
+            labelR.text = "Zone morte droite : $dzR %"
+        }
+        playHapticPattern("DOUBLE_TAP")
+        playSynthTone(620.0, 55, 0.2f)
+        logEvent("Profil -> $preset")
+        refresh()
+        Toast.makeText(this, "Profil $preset activé (courbe $stickCurveMode)", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun cycleStickCurve() {
+        val order = listOf("LINEAIRE", "PRECIS", "RAPIDE")
+        stickCurveMode = order[(order.indexOf(stickCurveMode) + 1) % order.size]
+        prefs.edit().putString("stickCurve", stickCurveMode).apply()
+        playHapticPattern("DOUBLE_TAP")
+        refresh()
+        Toast.makeText(this, "Courbe sticks : $stickCurveMode", Toast.LENGTH_SHORT).show()
+    }
+
     private fun buildTopBrandBar(): View {
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -356,7 +556,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         titleCol.addView(brandTitle)
 
         val subTitle = TextView(this).apply {
-            text = "Controller Hub"
+            text = "Controller Hub • $activePresetName"
             setTextColor(textSub)
             textSize = 13f
             typeface = Typeface.create("sans-serif", Typeface.NORMAL)
@@ -466,7 +666,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
             ).apply {
                 topMargin = dp(10)
             }
-            setOnClickListener { selectNav(1) }
+            setOnClickListener { cycleStickCurve() }
         }
 
         val sliderGlyph = TextView(this).apply {
@@ -478,9 +678,9 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         customBar.addView(sliderGlyph)
 
         val customText = TextView(this).apply {
-            text = "Personnaliser ma manette"
+            text = "Courbe sticks ($stickCurveMode) • Turbo : ${if (turboEnabled) "ON" else "OFF"}"
             setTextColor(textPure)
-            textSize = 14f
+            textSize = 13f
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         }
@@ -512,12 +712,9 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
             }
         }
 
-        val tileProfiles = makeGlassTile("🎮", "Profils", "Créer ou changer de profil", true) {
-            loadActiveProfileOffsets()
-            refreshDevices()
-            refreshBtStatus()
-            refresh()
-            Toast.makeText(this, "Profil synchronisé : ${activeProfileKey().take(24)}", Toast.LENGTH_SHORT).show()
+        val tileProfiles = makeGlassTile("🎮", "Profil : $activePresetName", "FPS / Course / Arcade", true) {
+            val next = presetProfiles[(presetProfiles.indexOf(activePresetName) + 1) % presetProfiles.size]
+            applyPresetProfile(next)
         }.apply {
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
                 marginStart = dp(5)
@@ -549,7 +746,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
                 if (Build.VERSION.SDK_INT >= 23) {
                     trackTintList = ColorStateList.valueOf(if (checked) crimsonGlow else textSub)
                 }
-                if (checked) vibrer()
+                if (checked) playHapticPattern("DOUBLE_TAP")
             }
         }
 
@@ -633,7 +830,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
 
     private fun cycleLedPreset() {
         val presets = listOf(
-            Triple("ROUGE DUSTØ", crimsonGlow, crimsonGlow),
+            Triple("ROUGE DUSTØ", Color.parseColor("#FF2A3C"), Color.parseColor("#FF2A3C")),
             Triple("BLEU PS", Color.parseColor("#2962FF"), Color.parseColor("#2962FF")),
             Triple("CYAN GLACIER", iceCyan, iceCyan),
             Triple("MENTHE", mintOnline, mintOnline),
@@ -643,6 +840,25 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         val next = presets[(idx + 1) % presets.size]
         applyControllerLight(next.first, next.second)
         Toast.makeText(this, "Éclairage : ${next.first}", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun copyDiagnosticReport() {
+        val padName = gamepads().firstOrNull()?.name ?: "Aucune manette"
+        val smoothness = if (jitterSamples > 0) {
+            max(0, 100 - ((jitterAccumulator / jitterSamples) * 120f).toInt())
+        } else 100
+        val report = buildString {
+            append("=== DUSTØ CONTROLLER HUB — RAPPORT DIAGNOSTIC ===\n")
+            append("Manette : $padName\n")
+            append("Profil : $activePresetName | Courbe : $stickCurveMode\n")
+            append("Zones mortes : G $dzL% / D $dzR% | Snapbacks : $snapbackCount\n")
+            append("Drift events : $driftEvents | Fantômes : $ghostInputCount\n")
+            append("Fluidité stick G : $smoothness% | Dernière latence : ${lastLatencyMs}ms\n")
+            append("Record DUSTØ OPS 3D : $bestKills kills (Vague max $bestWave)")
+        }
+        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+        cm?.setPrimaryClip(ClipData.newPlainText("DUSTØ Diagnostic", report))
+        Toast.makeText(this, "Rapport diagnostic copié", Toast.LENGTH_SHORT).show()
     }
 
     private fun buildStatsPage(): View {
@@ -679,6 +895,12 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
             resetCircleMetrics()
         }
         radarCard.addView(resetRadarBtn)
+
+        val copyReportBtn = Button(this)
+        styleActionButton(copyReportBtn, "Copier Rapport Diagnostic", mintOnline) {
+            copyDiagnosticReport()
+        }
+        radarCard.addView(copyReportBtn)
         col.addView(radarCard)
 
         val calibCard = LinearLayout(this).apply {
@@ -731,6 +953,61 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
             refresh()
         }
         calibCard.addView(seekR)
+
+        val curveBtn = Button(this)
+        styleActionButton(curveBtn, "Courbe Stick : $stickCurveMode", iceCyan) {
+            cycleStickCurve()
+            curveBtn.text = "Courbe Stick : $stickCurveMode"
+        }
+        calibCard.addView(curveBtn)
+
+        val invertBtn = Button(this)
+        styleActionButton(invertBtn, "Inverser Caméra Y : ${if (invertLookY) "OUI" else "NON"}", iceGold) {
+            invertLookY = !invertLookY
+            prefs.edit().putBoolean("invertLookY", invertLookY).apply()
+            invertBtn.text = "Inverser Caméra Y : ${if (invertLookY) "OUI" else "NON"}"
+        }
+        calibCard.addView(invertBtn)
+
+        val hairTrigBtn = Button(this)
+        styleActionButton(hairTrigBtn, "Hair-Trigger Gâchettes : ${if (hairTriggerEnabled) "ACTIF" else "STANDARD"}", mintOnline) {
+            hairTriggerEnabled = !hairTriggerEnabled
+            prefs.edit().putBoolean("hairTrigger", hairTriggerEnabled).apply()
+            hairTrigBtn.text = "Hair-Trigger Gâchettes : ${if (hairTriggerEnabled) "ACTIF" else "STANDARD"}"
+        }
+        calibCard.addView(hairTrigBtn)
+
+        val lockPadBtn = Button(this)
+        styleActionButton(lockPadBtn, "Verrouiller Profil / Manette : ${if (lockProfileToPad) "OUI" else "NON"}", iceCyan) {
+            lockProfileToPad = !lockProfileToPad
+            prefs.edit().putBoolean("lockProfileToPad", lockProfileToPad).apply()
+            lockPadBtn.text = "Verrouiller Profil / Manette : ${if (lockProfileToPad) "OUI" else "NON"}"
+        }
+        calibCard.addView(lockPadBtn)
+
+        val turboBtn = Button(this)
+        styleActionButton(turboBtn, "Bouton Turbo : ${if (turboEnabled) "ACTIF" else "OFF"}", crimsonGlow) {
+            turboEnabled = !turboEnabled
+            turboBtn.text = "Bouton Turbo : ${if (turboEnabled) "ACTIF" else "OFF"}"
+            refresh()
+        }
+        calibCard.addView(turboBtn)
+
+        val snapABtn = Button(this)
+        styleActionButton(snapABtn, "Sauver Relevé Manette A", iceCyan) {
+            snapshotPadA = "Snapback:$snapbackCount Drift:$driftEvents MaxL:${(maxCircL * 100).toInt()}%"
+            Toast.makeText(this, "Manette A enregistrée", Toast.LENGTH_SHORT).show()
+            refresh()
+        }
+        calibCard.addView(snapABtn)
+
+        val snapBBtn = Button(this)
+        styleActionButton(snapBBtn, "Sauver Relevé Manette B", iceGold) {
+            snapshotPadB = "Snapback:$snapbackCount Drift:$driftEvents MaxL:${(maxCircL * 100).toInt()}%"
+            Toast.makeText(this, "Manette B enregistrée", Toast.LENGTH_SHORT).show()
+            refresh()
+        }
+        calibCard.addView(snapBBtn)
 
         val calBtn = Button(this)
         styleActionButton(calBtn, "Calibrer le Profil Actuel", mintOnline) {
@@ -851,12 +1128,53 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         fpsCard.addView(fpsTitle)
 
         val fpsDesc = TextView(this).apply {
-            text = "Arène 3D en vue subjective avec bots tactiques : Stick G pour avancer/strafer, Stick D pour tourner la caméra, R2 / A pour tirer."
+            text = "Record : $bestKills kills (Vague max $bestWave) | Arène : ${arenaNames[currentArenaIndex]}"
             setTextColor(textSub)
             textSize = 12f
             setPadding(0, dp(4), 0, dp(6))
         }
         fpsCard.addView(fpsDesc)
+
+        fun refreshGameSummary() {
+            fpsDesc.text =
+                "Record : $bestKills kills (Vague max $bestWave) | Arène : ${arenaNames[currentArenaIndex]}\n" +
+                    "Arme : ${weaponModes[currentWeaponIndex]} | Bots : ${botModes[currentBotModeIndex]} | Duel : ${if (duelModeActive) "J1 vs J2" else "SOLO"}"
+        }
+
+        val arenaBtn = Button(this)
+        styleActionButton(arenaBtn, "Arène : ${arenaNames[currentArenaIndex]}", crimsonGlow) {
+            currentArenaIndex = (currentArenaIndex + 1) % arenaNames.size
+            arenaBtn.text = "Arène : ${arenaNames[currentArenaIndex]}"
+            refreshGameSummary()
+        }
+        fpsCard.addView(arenaBtn)
+
+        val weaponBtn = Button(this)
+        styleActionButton(weaponBtn, "Arme : ${weaponModes[currentWeaponIndex]}", iceGold) {
+            currentWeaponIndex = (currentWeaponIndex + 1) % weaponModes.size
+            weaponBtn.text = "Arme : ${weaponModes[currentWeaponIndex]}"
+            refreshGameSummary()
+        }
+        fpsCard.addView(weaponBtn)
+
+        val botModeBtn = Button(this)
+        styleActionButton(botModeBtn, "Mode Bots : ${botModes[currentBotModeIndex]}", iceCyan) {
+            currentBotModeIndex = (currentBotModeIndex + 1) % botModes.size
+            botModeBtn.text = "Mode Bots : ${botModes[currentBotModeIndex]}"
+            refreshGameSummary()
+        }
+        fpsCard.addView(botModeBtn)
+
+        val duelBtn = Button(this)
+        styleActionButton(duelBtn, "Mode Duel (Pass & Play) : ${if (duelModeActive) "ACTIF" else "OFF"}", mintOnline) {
+            duelModeActive = !duelModeActive
+            duelP1Kills = 0
+            duelP2Kills = 0
+            duelPlayerTurn = 1
+            duelBtn.text = "Mode Duel (Pass & Play) : ${if (duelModeActive) "ACTIF" else "OFF"}"
+            refreshGameSummary()
+        }
+        fpsCard.addView(duelBtn)
 
         val launchFpsBtn = Button(this)
         styleActionButton(launchFpsBtn, "Jouer à DUSTØ OPS 3D (Bots)", crimsonGlow) {
@@ -983,7 +1301,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
             orientation = LinearLayout.HORIZONTAL
         }
         for ((name, colHex) in listOf(
-            "ROUGE DUSTØ" to crimsonGlow,
+            "ROUGE DUSTØ" to Color.parseColor("#FF2A3C"),
             "BLEU PS" to Color.parseColor("#2962FF"),
             "CYAN GLACIER" to iceCyan,
             "MENTHE" to mintOnline,
@@ -1020,6 +1338,9 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
             peakCps = 0.0
             driftEvents = 0
             snapbackCount = 0
+            ghostInputCount = 0
+            jitterAccumulator = 0f
+            jitterSamples = 0
             maxTrigL = 0f
             maxTrigR = 0f
             pressTimestamps.clear()
@@ -1051,7 +1372,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         }
 
         val devTitle = TextView(this).apply {
-            text = "Matériel & Vibration"
+            text = "Matériel, Audio & HD Rumble"
             setTextColor(crimsonGlow)
             textSize = 15f
             typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
@@ -1121,6 +1442,24 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         }
         devCard.addView(seekVibDur)
 
+        val audioBtn = Button(this)
+        styleActionButton(audioBtn, "Son Synthétique : ${if (synthAudioEnabled) "ON" else "OFF"}", iceCyan) {
+            synthAudioEnabled = !synthAudioEnabled
+            prefs.edit().putBoolean("synthAudio", synthAudioEnabled).apply()
+            audioBtn.text = "Son Synthétique : ${if (synthAudioEnabled) "ON" else "OFF"}"
+            if (synthAudioEnabled) playSynthTone(520.0, 70, 0.25f)
+        }
+        devCard.addView(audioBtn)
+
+        val ecoBtn = Button(this)
+        styleActionButton(ecoBtn, "Mode Sombre Économie : ${if (ecoDarkMode) "ON" else "OFF"}", mintOnline) {
+            ecoDarkMode = !ecoDarkMode
+            prefs.edit().putBoolean("ecoDarkMode", ecoDarkMode).apply()
+            ecoBtn.text = "Mode Sombre Économie : ${if (ecoDarkMode) "ON" else "OFF"}"
+            recreate()
+        }
+        devCard.addView(ecoBtn)
+
         val scanBtn = Button(this)
         styleActionButton(scanBtn, "Actualiser Manettes", iceCyan) {
             refreshDevices()
@@ -1130,10 +1469,28 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         devCard.addView(scanBtn)
 
         val vibTestBtn = Button(this)
-        styleActionButton(vibTestBtn, "Tester la Vibration", crimsonGlow) {
+        styleActionButton(vibTestBtn, "Tester Vibration Standard", crimsonGlow) {
             vibrer()
         }
         devCard.addView(vibTestBtn)
+
+        val hbBtn = Button(this)
+        styleActionButton(hbBtn, "Motif HD : Battement de Cœur", crimsonGlow) {
+            playHapticPattern("HEARTBEAT")
+        }
+        devCard.addView(hbBtn)
+
+        val recoilBtn = Button(this)
+        styleActionButton(recoilBtn, "Motif HD : Recul Fusil", iceGold) {
+            playHapticPattern("RECOIL")
+        }
+        devCard.addView(recoilBtn)
+
+        val pulseBtn = Button(this)
+        styleActionButton(pulseBtn, "Motif HD : Beat / Pulse", iceCyan) {
+            playHapticPattern("PULSE")
+        }
+        devCard.addView(pulseBtn)
 
         col.addView(devCard)
         return ScrollView(this).apply {
@@ -1243,7 +1600,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         topBar.addView(fpsHudText)
 
         val helpText = TextView(this).apply {
-            text = "Stick G : avancer/strafer | Stick D : viser 3D | R2 / A : tirer"
+            text = "Stick G : bouger | Stick D : viser | L2 : ADS | R2 / A : tirer | X : Slow-Mo"
             setTextColor(textSub)
             textSize = 11f
             setPadding(0, dp(2), 0, 0)
@@ -1282,6 +1639,20 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         }
         controlsRow.addView(fireBtn)
 
+        val slowMoBtn = Button(this).apply {
+            text = "Slow-Mo"
+            textSize = 12f
+            setTextColor(textPure)
+            isAllCaps = false
+            background = actionButtonDrawable(iceCyan)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginStart = dp(3)
+                marginEnd = dp(3)
+            }
+            setOnClickListener { activateSlowMo() }
+        }
+        controlsRow.addView(slowMoBtn)
+
         val resetMatchBtn = Button(this).apply {
             text = "Relancer"
             textSize = 12f
@@ -1289,8 +1660,8 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
             isAllCaps = false
             background = actionButtonDrawable(iceGold)
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-                marginStart = dp(4)
-                marginEnd = dp(4)
+                marginStart = dp(3)
+                marginEnd = dp(3)
             }
             setOnClickListener { reset3DMatch() }
         }
@@ -1301,7 +1672,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
             textSize = 12f
             setTextColor(textPure)
             isAllCaps = false
-            background = actionButtonDrawable(iceCyan)
+            background = actionButtonDrawable(glassEdge)
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
                 marginStart = dp(4)
             }
@@ -1313,6 +1684,22 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         return col
     }
 
+    private fun activateSlowMo() {
+        val now = System.currentTimeMillis()
+        if (focusCharge >= 40f && now > slowMoUntil) {
+            focusCharge = max(0f, focusCharge - 40f)
+            slowMoUntil = now + 2600L
+            playHapticPattern("PULSE")
+            playSynthTone(310.0, 120, 0.25f)
+            pushKillFeed("⚡ SLOW-MO ACTIVÉ")
+        }
+    }
+
+    private fun pushKillFeed(entry: String) {
+        if (killFeed.size >= 4) killFeed.removeFirst()
+        killFeed.addLast(entry)
+    }
+
     private fun enterFpsMode() {
         fpsActive = true
         reset3DMatch()
@@ -1320,19 +1707,27 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         fpsContainer.visibility = View.VISIBLE
         gameHandler.removeCallbacks(fpsLoop)
         gameHandler.post(fpsLoop)
-        logEvent("Entrée DUSTØ OPS 3D")
+        logEvent("Entrée DUSTØ OPS 3D (${arenaNames[currentArenaIndex]})")
     }
 
     private fun reset3DMatch() {
         fpsKills = 0
+        streakKills = 0
         fpsWave = 1
         fpsShots = 0
         fpsHits = 0
+        fpsHeadshots = 0
+        weaponHeat = 0f
+        weaponOverheated = false
+        focusCharge = 100f
+        slowMoUntil = 0L
         playerHealth = 100
         playerX = 1.6
         playerY = 1.6
         playerAngle = 0.65
         weaponRecoil = 0f
+        killFeed.clear()
+        spawnMedKits()
         spawnBotsWave(4)
         updateFpsHud()
     }
@@ -1347,26 +1742,56 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
     }
 
     private fun isWalkable(wx: Double, wy: Double): Boolean {
+        val map = currentWorldMap()
         val mx = wx.toInt()
         val my = wy.toInt()
-        if (my !in worldMap.indices || mx !in worldMap[0].indices) return false
-        return worldMap[my][mx] == 0
+        if (my !in map.indices || mx !in map[0].indices) return false
+        return map[my][mx] == 0
+    }
+
+    private fun spawnMedKits() {
+        medKits.clear()
+        val map = currentWorldMap()
+        var placed = 0
+        var guard = 0
+        while (placed < 2 && guard < 150) {
+            guard++
+            val mx = Random.nextInt(1, map[0].size - 1) + 0.5
+            val my = Random.nextInt(1, map.size - 1) + 0.5
+            if (isWalkable(mx, my) && hypot(mx - playerX, my - playerY) > 2.5) {
+                medKits.add(MedKit(mx, my, true))
+                placed++
+            }
+        }
     }
 
     private fun spawnBotsWave(count: Int) {
         enemyBots.clear()
+        val map = currentWorldMap()
         var placed = 0
         var guard = 0
         while (placed < count && guard < 200) {
             guard++
-            val bx = Random.nextInt(1, worldMap[0].size - 1) + 0.5
-            val by = Random.nextInt(1, worldMap.size - 1) + 0.5
+            val bx = Random.nextInt(1, map[0].size - 1) + 0.5
+            val by = Random.nextInt(1, map.size - 1) + 0.5
             if (isWalkable(bx, by) && hypot(bx - playerX, by - playerY) > 3.2) {
+                val role = when (placed % 3) {
+                    0 -> BotRole.RUSHER
+                    1 -> BotRole.SNIPER
+                    else -> BotRole.TANK
+                }
+                val maxHp = when (role) {
+                    BotRole.TANK -> 160
+                    BotRole.RUSHER -> 85
+                    BotRole.SNIPER -> 100
+                }
                 enemyBots.add(
                     EnemyBot(
                         x = bx,
                         y = by,
-                        hp = 100,
+                        hp = maxHp,
+                        maxHp = maxHp,
+                        role = role,
                         moveAngle = Random.nextDouble(0.0, Math.PI * 2.0),
                         lastAttackMs = System.currentTimeMillis() + Random.nextLong(600L, 1800L)
                     )
@@ -1391,7 +1816,15 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
     private fun fire3DWeapon() {
         if (!fpsActive) return
         val now = System.currentTimeMillis()
-        if (now - lastShotTimeMs < 140L) return
+        if (weaponOverheated) return
+
+        val weapon = weaponModes[currentWeaponIndex]
+        val cooldown = when (weapon) {
+            "LOURD" -> 340L
+            "RAFALE" -> 210L
+            else -> 135L
+        }
+        if (now - lastShotTimeMs < cooldown) return
         lastShotTimeMs = now
 
         if (playerHealth <= 0) {
@@ -1400,13 +1833,23 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         }
 
         fpsShots++
-        weaponRecoil = 1f
+        weaponHeat = min(100f, weaponHeat + if (weapon == "LOURD") 19f else 11f)
+        if (weaponHeat >= 100f) {
+            weaponOverheated = true
+            pushKillFeed("🔥 ARME EN SURCHAUFFE")
+        }
+
+        weaponRecoil = if (weapon == "LOURD") 1.4f else 1f
         muzzleFlashUntil = now + 75L
+        if (vibrationEnabled) playHapticPattern("RECOIL")
+        playSynthTone(if (weapon == "LOURD") 145.0 else 210.0, 55, 0.25f)
 
         val dirX = cos(playerAngle)
         val dirY = sin(playerAngle)
         var bestBot: EnemyBot? = null
         var bestDist = 14.0
+        var isCrit = false
+        val adsBonus = if (effectiveTrigger(trigL) > 0.45f) 0.72 else 1.0
 
         for (bot in enemyBots) {
             val dx = bot.x - playerX
@@ -1415,10 +1858,12 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
             if (dist < bestDist && dist > 0.1) {
                 val dot = (dx * dirX + dy * dirY) / dist
                 val angleDiff = abs(atan2(dirX * dy - dirY * dx, dirX * dx + dirY * dy))
-                val hitCone = max(0.08, 0.34 / dist)
+                val hitCone = max(0.08, (0.34 * adsBonus) / dist)
+                val critCone = max(0.035, (0.14 * adsBonus) / dist)
                 if (dot > 0.0 && angleDiff <= hitCone && hasLineOfSight(playerX, playerY, bot.x, bot.y)) {
                     bestDist = dist
                     bestBot = bot
+                    isCrit = angleDiff <= critCone
                 }
             }
         }
@@ -1426,39 +1871,131 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         if (bestBot != null) {
             fpsHits++
             hitMarkerUntil = now + 150L
-            bestBot.hp -= 50
+            if (isCrit) {
+                fpsHeadshots++
+                headshotMarkerUntil = now + 180L
+            }
+            val baseDmg = when (weapon) {
+                "LOURD" -> 100
+                "RAFALE" -> 65
+                else -> 50
+            }
+            val finalDmg = if (isCrit) (baseDmg * 1.5f).toInt() else baseDmg
+            bestBot.hp -= finalDmg
+            playSynthTone(if (isCrit) 940.0 else 680.0, 45, 0.2f)
+
             if (bestBot.hp <= 0) {
                 enemyBots.remove(bestBot)
                 fpsKills++
-                if (vibrationEnabled) pulseShortTap()
+                streakKills++
+                focusCharge = min(100f, focusCharge + 22f)
+                if (duelModeActive) {
+                    if (duelPlayerTurn == 1) duelP1Kills++ else duelP2Kills++
+                }
+                val streakTag = when {
+                    streakKills >= 4 -> " • MONSTER KILL!"
+                    streakKills == 3 -> " • TRIPLE KILL!"
+                    streakKills == 2 -> " • DOUBLE KILL!"
+                    else -> ""
+                }
+                pushKillFeed("☠ Bot ${bestBot.role.name}$streakTag")
+                if (fpsKills > bestKills) {
+                    bestKills = fpsKills
+                    prefs.edit().putInt("bestKills", bestKills).apply()
+                }
+                if (vibrationEnabled) playHapticPattern("DOUBLE_TAP")
             }
             if (enemyBots.isEmpty()) {
                 fpsWave++
+                streakKills = 0
+                if (duelModeActive) {
+                    duelPlayerTurn = if (duelPlayerTurn == 1) 2 else 1
+                }
+                if (fpsWave > bestWave) {
+                    bestWave = fpsWave
+                    prefs.edit().putInt("bestWave", bestWave).apply()
+                }
                 playerHealth = min(100, playerHealth + 25)
+                spawnMedKits()
                 spawnBotsWave(min(7, 3 + fpsWave))
+                pushKillFeed("▲ VAGUE $fpsWave")
             }
+        } else {
+            streakKills = 0
         }
         updateFpsHud()
     }
 
-    private fun pulseShortTap() {
+    private fun playHapticPattern(pattern: String) {
+        if (!vibrationEnabled) return
         val d = gamepads().firstOrNull()
-        if (d != null && Build.VERSION.SDK_INT >= 31) {
-            try {
-                d.vibratorManager?.defaultVibrator?.vibrate(
-                    VibrationEffect.createOneShot(55L, 180)
-                )
-            } catch (_: Exception) {
-            }
+        val vib: Vibrator? = if (d != null && Build.VERSION.SDK_INT >= 31) {
+            d.vibratorManager?.defaultVibrator
+        } else if (Build.VERSION.SDK_INT >= 31) {
+            (getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)?.defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
         }
+        if (vib == null || !vib.hasVibrator()) return
+
+        try {
+            if (Build.VERSION.SDK_INT >= 26) {
+                val amp = if (vib.hasAmplitudeControl()) vibAmplitude else VibrationEffect.DEFAULT_AMPLITUDE
+                when (pattern) {
+                    "HEARTBEAT" -> {
+                        val timings = longArrayOf(0L, 65L, 95L, 75L)
+                        val amps = intArrayOf(0, amp, 0, (amp * 0.75f).toInt().coerceAtLeast(1))
+                        vib.vibrate(VibrationEffect.createWaveform(timings, amps, -1))
+                    }
+                    "RECOIL" -> {
+                        vib.vibrate(VibrationEffect.createOneShot(70L, amp))
+                    }
+                    "PULSE" -> {
+                        val timings = longArrayOf(0L, 55L, 70L, 55L, 70L, 55L)
+                        val amps = intArrayOf(0, amp, 0, (amp * 0.8f).toInt().coerceAtLeast(1), 0, amp)
+                        vib.vibrate(VibrationEffect.createWaveform(timings, amps, -1))
+                    }
+                    else -> {
+                        val timings = longArrayOf(0L, 45L, 60L, 45L)
+                        val amps = intArrayOf(0, amp, 0, amp)
+                        vib.vibrate(VibrationEffect.createWaveform(timings, amps, -1))
+                    }
+                }
+            } else {
+                @Suppress("DEPRECATION")
+                vib.vibrate(90L)
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun effectiveTrigger(rawTrig: Float): Float {
+        if (!hairTriggerEnabled) return rawTrig
+        return ((rawTrig - 0.12f) / 0.55f).coerceIn(0f, 1f)
     }
 
     private fun stepFpsSimulation() {
         val now = System.currentTimeMillis()
+        val timeFactor = if (now < slowMoUntil) 0.45 else 1.0
         weaponRecoil = max(0f, weaponRecoil - 0.14f)
 
+        // Refroidissement de l'arme & recharge concentration
+        weaponHeat = max(0f, weaponHeat - if (weaponOverheated) 0.9f else 0.65f)
+        if (weaponOverheated && weaponHeat <= 15f) {
+            weaponOverheated = false
+        }
+        if (now >= slowMoUntil) {
+            focusCharge = min(100f, focusCharge + 0.12f)
+        }
+
+        if (playerHealth in 1..25 && now - lastHeartbeatMs > 650L) {
+            lastHeartbeatMs = now
+            playHapticPattern("HEARTBEAT")
+        }
+
         if (playerHealth <= 0) {
-            if (trigR > 0.7f) reset3DMatch()
+            if (effectiveTrigger(trigR) > 0.7f) reset3DMatch()
             updateFpsHud()
             if (::fpsArenaView.isInitialized) fpsArenaView.invalidate()
             return
@@ -1466,10 +2003,14 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
 
         val move = corriger(rawLX, rawLY, offLX, offLY, dzL)
         val look = corriger(rawRX, rawRY, offRX, offRY, dzR)
+        val adsActive = effectiveTrigger(trigL) > 0.45f
+        val lookScale = (if (adsActive) 0.038 else 0.068) * (if (now < slowMoUntil) 0.7 else 1.0)
+        val yDir = if (invertLookY) -1.0 else 1.0
 
-        playerAngle += look.first * 0.068
-        val forward = -move.second * 0.062
-        val strafe = move.first * 0.052
+        playerAngle += look.first * lookScale * yDir
+        val moveScale = (if (adsActive) 0.042 else 0.062) * (if (now < slowMoUntil) 0.75 else 1.0)
+        val forward = -move.second * moveScale
+        val strafe = move.first * (moveScale * 0.85)
 
         val stepX = cos(playerAngle) * forward - sin(playerAngle) * strafe
         val stepY = sin(playerAngle) * forward + cos(playerAngle) * strafe
@@ -1482,32 +2023,60 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
             playerY += stepY
         }
 
-        if (trigR > 0.62f) {
+        // Ramassage caisses de soin
+        for (kit in medKits) {
+            if (kit.active && hypot(kit.x - playerX, kit.y - playerY) < 0.65) {
+                kit.active = false
+                playerHealth = min(100, playerHealth + 35)
+                playSynthTone(780.0, 90, 0.22f)
+                pushKillFeed("+35 HP SOIN")
+            }
+        }
+
+        if (effectiveTrigger(trigR) > 0.62f) {
             fire3DWeapon()
         }
 
+        val botMode = botModes[currentBotModeIndex]
         for (bot in enemyBots) {
             val dx = playerX - bot.x
             val dy = playerY - bot.y
             val dist = hypot(dx, dy)
-            val seesPlayer = dist < 8.5 && hasLineOfSight(bot.x, bot.y, playerX, playerY)
+            val range = if (bot.role == BotRole.SNIPER) 10.5 else 8.5
+            val seesPlayer = botMode != "ENTRAINEMENT" && dist < range && hasLineOfSight(bot.x, bot.y, playerX, playerY)
 
             if (seesPlayer) {
                 bot.moveAngle = atan2(dy, dx)
-                if (dist > 1.8) {
-                    val bvx = cos(bot.moveAngle) * 0.022
-                    val bvy = sin(bot.moveAngle) * 0.022
+                val roleSpeed = when (bot.role) {
+                    BotRole.RUSHER -> 0.034
+                    BotRole.TANK -> 0.016
+                    BotRole.SNIPER -> 0.015
+                }
+                val chaseSpeed = roleSpeed * (if (botMode == "AGRESSIF") 1.25 else 0.9) * timeFactor
+                val minDist = if (bot.role == BotRole.SNIPER) 4.2 else 1.7
+                if (dist > minDist) {
+                    val bvx = cos(bot.moveAngle) * chaseSpeed
+                    val bvy = sin(bot.moveAngle) * chaseSpeed
                     if (isWalkable(bot.x + bvx, bot.y)) bot.x += bvx
                     if (isWalkable(bot.x, bot.y + bvy)) bot.y += bvy
                 }
-                if (now - bot.lastAttackMs > 1250L) {
+                val attackCd = if (bot.role == BotRole.SNIPER) 1650L else 1200L
+                if (now - bot.lastAttackMs > attackCd) {
                     bot.lastAttackMs = now
-                    playerHealth = max(0, playerHealth - 9)
+                    val botDmg = when (bot.role) {
+                        BotRole.SNIPER -> 14
+                        BotRole.TANK -> 11
+                        BotRole.RUSHER -> 8
+                    }
+                    playerHealth = max(0, playerHealth - botDmg)
                     damageFlashUntil = now + 180L
+                    playHapticPattern("HEARTBEAT")
+                    playSynthTone(115.0, 80, 0.25f)
                 }
             } else {
-                val bvx = cos(bot.moveAngle) * 0.018
-                val bvy = sin(bot.moveAngle) * 0.018
+                val patrolSpeed = (if (botMode == "ENTRAINEMENT") 0.012 else 0.018) * timeFactor
+                val bvx = cos(bot.moveAngle) * patrolSpeed
+                val bvy = sin(bot.moveAngle) * patrolSpeed
                 if (isWalkable(bot.x + bvx, bot.y + bvy)) {
                     bot.x += bvx
                     bot.y += bvy
@@ -1526,10 +2095,13 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
     private fun updateFpsHud() {
         if (!::fpsHudText.isInitialized) return
         val acc = if (fpsShots > 0) (fpsHits * 100) / fpsShots else 0
+        val heatPct = weaponHeat.toInt()
+        val focusPct = focusCharge.toInt()
+        val duelTag = if (duelModeActive) " | J${duelPlayerTurn} ($duelP1Kills/$duelP2Kills)" else ""
         fpsHudText.text = if (playerHealth > 0) {
-            "HP $playerHealth% | KILLS $fpsKills | VAGUE $fpsWave | BOTS ${enemyBots.size} | PRÉC $acc%"
+            "HP $playerHealth% | KILLS $fpsKills | V$fpsWave | CHAUFFE $heatPct% | FOC $focusPct% | PRÉC $acc%$duelTag"
         } else {
-            "ÉLIMINÉ — Appuie sur R2 / A ou Relancer (Kills : $fpsKills)"
+            "ÉLIMINÉ — Appuie sur R2 / A ou Relancer (Kills : $fpsKills | Record : $bestKills)"
         }
     }
 
@@ -1612,6 +2184,12 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         offLY = prefs.getFloat("${key}_offLY", prefs.getFloat("offLY", 0f))
         offRX = prefs.getFloat("${key}_offRX", prefs.getFloat("offRX", 0f))
         offRY = prefs.getFloat("${key}_offRY", prefs.getFloat("offRY", 0f))
+        if (lockProfileToPad) {
+            val savedPreset = prefs.getString("${key}_preset", null)
+            if (!savedPreset.isNullOrBlank()) {
+                activePresetName = savedPreset
+            }
+        }
     }
 
     private fun saveActiveProfileOffsets() {
@@ -1631,6 +2209,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
     private fun applyControllerLight(name: String, colorInt: Int) {
         selectedLedName = name
         selectedLedColor = colorInt
+        crimsonGlow = colorInt
         if (::ledPreviewView.isInitialized) {
             ledPreviewView.background = GradientDrawable().apply {
                 setColor(colorInt)
@@ -1647,8 +2226,9 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
     }
 
     private fun triggerRageQuit() {
-        applyControllerLight("ALERTE ROUGE", crimsonGlow)
-        vibrer()
+        applyControllerLight("ALERTE ROUGE", Color.parseColor("#FF2A3C"))
+        playHapticPattern("PULSE")
+        playSynthTone(180.0, 140, 0.3f)
         logEvent("PANIQUE / RAGE QUIT")
         Toast.makeText(
             this,
@@ -1668,6 +2248,8 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         sectorsHitL = BooleanArray(12)
         sectorsHitR = BooleanArray(12)
         snapbackCount = 0
+        jitterAccumulator = 0f
+        jitterSamples = 0
         refresh()
         Toast.makeText(this, "Circularité réinitialisée", Toast.LENGTH_SHORT).show()
     }
@@ -1797,6 +2379,11 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         if ((ev.source and InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK &&
             ev.action == MotionEvent.ACTION_MOVE
         ) {
+            val now = System.currentTimeMillis()
+            if (lastInputEventMs > 0L) {
+                lastLatencyMs = (now - lastInputEventMs).coerceIn(1L, 250L)
+            }
+            lastInputEventMs = now
             readAxes(ev)
             updateStickAnalytics()
             refresh()
@@ -1810,21 +2397,35 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         val isPad = (src and InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD ||
             (src and InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK
         if (isPad) {
+            val now = System.currentTimeMillis()
+            if (lastInputEventMs > 0L) {
+                lastLatencyMs = (now - lastInputEventMs).coerceIn(1L, 250L)
+            }
+            lastInputEventMs = now
+
             val name = KeyEvent.keyCodeToString(ev.keyCode).removePrefix("KEYCODE_")
             if (ev.action == KeyEvent.ACTION_DOWN) {
                 pressed.add(name)
-                val now = System.currentTimeMillis()
                 pressTimestamps.addLast(now)
                 while (pressTimestamps.isNotEmpty() && now - pressTimestamps.first() > 1000L) {
                     pressTimestamps.removeFirst()
                 }
                 peakCps = max(peakCps, pressTimestamps.size.toDouble())
-                logEvent("DOWN $name")
-                if (fpsActive && (ev.keyCode == KeyEvent.KEYCODE_BUTTON_A ||
-                        ev.keyCode == KeyEvent.KEYCODE_BUTTON_R1 ||
-                        ev.keyCode == KeyEvent.KEYCODE_DPAD_CENTER ||
-                        ev.keyCode == KeyEvent.KEYCODE_ENTER)
+                logEvent("DOWN $name (${lastLatencyMs}ms)")
+
+                if (fpsActive) {
+                    when (ev.keyCode) {
+                        KeyEvent.KEYCODE_BUTTON_A,
+                        KeyEvent.KEYCODE_BUTTON_R1,
+                        KeyEvent.KEYCODE_DPAD_CENTER,
+                        KeyEvent.KEYCODE_ENTER -> fire3DWeapon()
+                        KeyEvent.KEYCODE_BUTTON_X -> activateSlowMo()
+                    }
+                }
+                if (turboEnabled && now - lastTurboMs > 85L &&
+                    (ev.keyCode == KeyEvent.KEYCODE_BUTTON_A || ev.keyCode == KeyEvent.KEYCODE_BUTTON_R1)
                 ) {
+                    lastTurboMs = now
                     fire3DWeapon()
                 }
             } else if (ev.action == KeyEvent.ACTION_UP) {
@@ -1879,7 +2480,20 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         if (magL > 0.25f) {
             val secL = ((angleDeg(rawLX, rawLY) / 360f) * 12).toInt().coerceIn(0, 11)
             sectorsHitL[secL] = true
+
+            val curAng = atan2(rawLY.toDouble(), rawLX.toDouble())
+            if (hasPrevAngleL) {
+                var diff = abs(curAng - lastDirAngleL)
+                if (diff > PI) diff = 2.0 * PI - diff
+                jitterAccumulator += diff.toFloat()
+                jitterSamples++
+            }
+            lastDirAngleL = curAng
+            hasPrevAngleL = true
+        } else {
+            hasPrevAngleL = false
         }
+
         if (magR > 0.25f) {
             val secR = ((angleDeg(rawRX, rawRY) / 360f) * 12).toInt().coerceIn(0, 11)
             sectorsHitR[secR] = true
@@ -1901,11 +2515,25 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
             hypot(corrR.first.toDouble(), corrR.second.toDouble()) > 0.05
         ) {
             driftEvents++
+            if (pressed.isEmpty() && trigL < 0.05f && trigR < 0.05f && driftEvents % 25 == 0) {
+                ghostInputCount++
+            }
         }
 
         prevMagL = magL
         prevMagR = magR
         lastMoveTime = now
+    }
+
+    private fun shapeCurve(v: Float): Float {
+        val sign = if (v < 0f) -1f else 1f
+        val a = abs(v).coerceIn(0f, 1f)
+        val shaped = when (stickCurveMode) {
+            "PRECIS" -> a.toDouble().pow(1.45).toFloat()
+            "RAPIDE" -> a.toDouble().pow(0.75).toFloat()
+            else -> a
+        }
+        return sign * shaped
     }
 
     private fun corriger(x: Float, y: Float, ox: Float, oy: Float, dzPercent: Int): Pair<Float, Float> {
@@ -1914,8 +2542,9 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         val ay = y - oy
         val mag = sqrt(ax * ax + ay * ay)
         if (mag <= dz || mag == 0f) return Pair(0f, 0f)
-        val scale = ((mag - dz) / (1f - dz)).coerceAtMost(1f) / mag
-        return Pair(ax * scale, ay * scale)
+        val norm = ((mag - dz) / (1f - dz)).coerceAtMost(1f)
+        val curved = shapeCurve(norm) / mag
+        return Pair(ax * curved, ay * curved)
     }
 
     private fun angleDeg(x: Float, y: Float): Float {
@@ -1982,8 +2611,16 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         offRY = 0f
         dzL = 10
         dzR = 10
+        stickCurveMode = "PRECIS"
+        invertLookY = false
+        hairTriggerEnabled = true
+        turboEnabled = false
         saveActiveProfileOffsets()
-        prefs.edit().putInt("dzL", dzL).putInt("dzR", dzR).apply()
+        prefs.edit()
+            .putInt("dzL", dzL).putInt("dzR", dzR)
+            .putString("stickCurve", stickCurveMode)
+            .putBoolean("invertLookY", invertLookY)
+            .putBoolean("hairTrigger", hairTriggerEnabled).apply()
         seekL.progress = dzL
         seekR.progress = dzR
         labelL.text = "Zone morte gauche : $dzL %"
@@ -2083,7 +2720,8 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         sb.append(" (").append((magR * 100f).toInt()).append("%)\n\n")
 
         sb.append("GÂCHETTES  L ").append(f(trigL)).append("  R ").append(f(trigR)).append("\n")
-        sb.append("CROIX      X ").append(f(hatX)).append("  Y ").append(f(hatY)).append("\n\n")
+        sb.append("CROIX      X ").append(f(hatX)).append("  Y ").append(f(hatY)).append("\n")
+        sb.append("LATENCE    ").append(lastLatencyMs).append(" ms | FANTÔMES ").append(ghostInputCount).append("\n\n")
         sb.append("BOUTONS : ")
         sb.append(if (pressed.isEmpty()) "-" else pressed.joinToString(", "))
         liveText.text = sb.toString()
@@ -2110,20 +2748,26 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         }
 
         if (::driftSummaryText.isInitialized) {
+            val smoothness = if (jitterSamples > 0) {
+                max(0, 100 - ((jitterAccumulator / jitterSamples) * 120f).toInt())
+            } else 100
             val dSb = StringBuilder()
             dSb.append("GAUCHE : ").append(placementStatus(rawLX, rawLY, dzL)).append("\n")
             dSb.append("  Rang : ").append(circleRank(maxCircL, sectorsHitL)).append("\n")
+            dSb.append("  Régularité : ").append(smoothness).append("%\n")
             dSb.append("DROIT  : ").append(placementStatus(rawRX, rawRY, dzR)).append("\n")
             dSb.append("  Rang : ").append(circleRank(maxCircR, sectorsHitR)).append("\n")
-            dSb.append("SNAPBACKS : ").append(snapbackCount)
+            dSb.append("SNAPBACKS : ").append(snapbackCount).append("\n")
+            dSb.append("A : ").append(snapshotPadA).append("\n")
+            dSb.append("B : ").append(snapshotPadB)
             driftSummaryText.text = dSb.toString()
         }
 
         if (::calibStatusText.isInitialized) {
             calibStatusText.text =
-                "Profil : ${activeProfileKey().take(28)}\n" +
+                "Profil : $activePresetName ($stickCurveMode)\n" +
                     "Offset G (${f(offLX)}, ${f(offLY)}) | Offset D (${f(offRX)}, ${f(offRY)})\n" +
-                    "Zones mortes : G $dzL% / D $dzR%"
+                    "Zones mortes : G $dzL% / D $dzR% | Turbo : ${if (turboEnabled) "ON" else "OFF"}"
         }
 
         if (::funStatsText.isInitialized) {
@@ -2143,7 +2787,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
 
     private inner class SmokeBackdropView(context: Context) : View(context) {
         private val basePaint = Paint().apply {
-            color = bgObsidian
+            color = if (ecoDarkMode) Color.BLACK else bgObsidian
             style = Paint.Style.FILL
         }
 
@@ -2153,11 +2797,13 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
             super.onSizeChanged(w, h, oldw, oldh)
             if (w <= 0 || h <= 0) return
+            val alphaTop = if (ecoDarkMode) 28 else 125
+            val alphaMid = if (ecoDarkMode) 20 else 110
             topSmokePaint.shader = RadialGradient(
                 w * 0.72f,
                 h * 0.08f,
                 max(w, h) * 0.65f,
-                intArrayOf(Color.argb(125, 195, 22, 42), Color.argb(45, 70, 8, 18), Color.TRANSPARENT),
+                intArrayOf(Color.argb(alphaTop, 195, 22, 42), Color.argb(45, 70, 8, 18), Color.TRANSPARENT),
                 floatArrayOf(0f, 0.5f, 1f),
                 Shader.TileMode.CLAMP
             )
@@ -2165,7 +2811,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
                 w * 0.28f,
                 h * 0.42f,
                 max(w, h) * 0.55f,
-                intArrayOf(Color.argb(110, 165, 16, 36), Color.argb(30, 50, 6, 14), Color.TRANSPARENT),
+                intArrayOf(Color.argb(alphaMid, 165, 16, 36), Color.argb(30, 50, 6, 14), Color.TRANSPARENT),
                 floatArrayOf(0f, 0.55f, 1f),
                 Shader.TileMode.CLAMP
             )
@@ -2323,6 +2969,11 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
             style = Paint.Style.STROKE
             strokeWidth = dp(2).toFloat()
         }
+        private val feedPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = textPure
+            textSize = dp(10).toFloat()
+            typeface = Typeface.MONOSPACE
+        }
         private val gunPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
         private val flashPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.argb(210, 255, 210, 90)
@@ -2336,6 +2987,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
             val h = height.toFloat()
             if (w <= 20f || h <= 20f) return
 
+            val map = currentWorldMap()
             val horizon = h * 0.5f
             skyPaint.shader = LinearGradient(
                 0f, 0f, 0f, horizon,
@@ -2353,7 +3005,8 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
             canvas.drawRect(0f, horizon, w, h, floorPaint)
 
             val rayCount = 96
-            val fov = Math.toRadians(66.0)
+            val fovDeg = if (effectiveTrigger(trigL) > 0.45f) 46.0 else 66.0
+            val fov = Math.toRadians(fovDeg)
             val sliceW = w / rayCount
             val zBuffer = DoubleArray(rayCount) { 20.0 }
 
@@ -2403,10 +3056,10 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
                         mapY += stepY
                         side = 1
                     }
-                    if (mapY !in worldMap.indices || mapX !in worldMap[0].indices) {
+                    if (mapY !in map.indices || mapX !in map[0].indices) {
                         hitType = 1
-                    } else if (worldMap[mapY][mapX] > 0) {
-                        hitType = worldMap[mapY][mapX]
+                    } else if (map[mapY][mapX] > 0) {
+                        hitType = map[mapY][mapX]
                     }
                 }
 
@@ -2464,14 +3117,18 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
                 if (transformY > 0.2) {
                     val spriteScreenX = ((w / 2.0) * (1.0 + transformX / transformY)).toFloat()
                     val spriteHeight = abs((h / transformY)).toFloat()
-                    val spriteWidth = spriteHeight * 0.46f
+                    val spriteWidth = spriteHeight * (if (bot.role == BotRole.TANK) 0.56f else 0.46f)
                     val centerSlice = ((spriteScreenX / w) * rayCount).toInt()
 
                     if (centerSlice in zBuffer.indices && transformY < zBuffer[centerSlice]) {
                         val top = horizon - spriteHeight * 0.42f
                         val bottom = horizon + spriteHeight * 0.5f
 
-                        botPaint.color = Color.parseColor("#2B313D")
+                        botPaint.color = when (bot.role) {
+                            BotRole.TANK -> Color.parseColor("#3D2B36")
+                            BotRole.RUSHER -> Color.parseColor("#25363D")
+                            BotRole.SNIPER -> Color.parseColor("#2B313D")
+                        }
                         val torso = RectF(
                             spriteScreenX - spriteWidth * 0.5f,
                             top + spriteHeight * 0.22f,
@@ -2487,7 +3144,11 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
                         canvas.drawCircle(spriteScreenX, headCy, headR, botPaint)
                         canvas.drawCircle(spriteScreenX, headCy, headR, botOutlinePaint)
 
-                        botPaint.color = crimsonGlow
+                        botPaint.color = when (bot.role) {
+                            BotRole.RUSHER -> iceGold
+                            BotRole.SNIPER -> iceCyan
+                            BotRole.TANK -> crimsonGlow
+                        }
                         canvas.drawRect(
                             spriteScreenX - headR * 0.65f,
                             headCy - headR * 0.2f,
@@ -2497,7 +3158,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
                         )
 
                         val hpBarW = spriteWidth * 0.9f
-                        val hpRatio = (bot.hp / 100f).coerceIn(0f, 1f)
+                        val hpRatio = (bot.hp.toFloat() / bot.maxHp.toFloat()).coerceIn(0f, 1f)
                         botPaint.color = Color.DKGRAY
                         canvas.drawRect(spriteScreenX - hpBarW / 2f, top - dp(10), spriteScreenX + hpBarW / 2f, top - dp(4), botPaint)
                         botPaint.color = crimsonGlow
@@ -2508,7 +3169,12 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
 
             val cx = w / 2f
             val cy = h / 2f
-            hudPaint.color = if (System.currentTimeMillis() < hitMarkerUntil) crimsonGlow else iceCyan
+            val now = System.currentTimeMillis()
+            hudPaint.color = when {
+                now < headshotMarkerUntil -> iceGold
+                now < hitMarkerUntil -> crimsonGlow
+                else -> iceCyan
+            }
             val gap = dp(7).toFloat()
             val arm = dp(14).toFloat()
             canvas.drawLine(cx - arm, cy, cx - gap, cy, hudPaint)
@@ -2516,13 +3182,31 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
             canvas.drawLine(cx, cy - arm, cx, cy - gap, hudPaint)
             canvas.drawLine(cx, cy + gap, cx, cy + arm, hudPaint)
 
+            // Radar directionnel vers le bot le plus proche
+            val nearestBot = enemyBots.minByOrNull { hypot(it.x - playerX, it.y - playerY) }
+            if (nearestBot != null) {
+                val relAngle = atan2(nearestBot.y - playerY, nearestBot.x - playerX) - playerAngle
+                val indR = dp(34).toFloat()
+                val ix = cx + cos(relAngle).toFloat() * indR
+                val iy = cy + sin(relAngle).toFloat() * indR
+                botPaint.color = crimsonGlow
+                canvas.drawCircle(ix, iy, dp(3).toFloat(), botPaint)
+            }
+
+            // Killfeed en haut à droite
+            var feedY = dp(16).toFloat()
+            for (line in killFeed.reversed()) {
+                canvas.drawText(line, w - dp(155), feedY, feedPaint)
+                feedY += dp(13).toFloat()
+            }
+
             val kickY = weaponRecoil * dp(18).toFloat()
             val kickX = weaponRecoil * dp(8).toFloat()
-            if (System.currentTimeMillis() < muzzleFlashUntil) {
+            if (now < muzzleFlashUntil) {
                 canvas.drawCircle(w * 0.68f + kickX, h * 0.68f + kickY, dp(26).toFloat(), flashPaint)
             }
 
-            gunPaint.color = Color.parseColor("#181B24")
+            gunPaint.color = if (weaponOverheated) Color.parseColor("#5C1822") else Color.parseColor("#181B24")
             val barrel = Path().apply {
                 moveTo(w * 0.64f + kickX, h * 0.67f + kickY)
                 lineTo(w * 0.72f + kickX, h * 0.67f + kickY)
@@ -2532,7 +3216,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
             }
             canvas.drawPath(barrel, gunPaint)
 
-            gunPaint.color = crimsonGlow
+            gunPaint.color = if (weaponOverheated) iceGold else crimsonGlow
             canvas.drawRect(
                 w * 0.665f + kickX,
                 h * 0.69f + kickY,
@@ -2543,22 +3227,43 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
 
             drawMiniMap(canvas)
 
-            if (System.currentTimeMillis() < damageFlashUntil) {
+            if (now < damageFlashUntil) {
                 overlayPaint.color = Color.argb(95, 255, 25, 45)
+                canvas.drawRect(0f, 0f, w, h, overlayPaint)
+            } else if (now < slowMoUntil) {
+                overlayPaint.color = Color.argb(42, 76, 232, 255)
+                canvas.drawRect(0f, 0f, w, h, overlayPaint)
+            } else if (playerHealth in 1..25) {
+                val pulse = ((sin(now * 0.012) + 1.0) * 28.0).toInt()
+                overlayPaint.color = Color.argb(pulse.coerceIn(10, 65), 255, 20, 40)
                 canvas.drawRect(0f, 0f, w, h, overlayPaint)
             }
         }
 
         private fun drawMiniMap(canvas: Canvas) {
+            val map = currentWorldMap()
             val cell = dp(8).toFloat()
             val ox = dp(10).toFloat()
             val oy = dp(10).toFloat()
             val mapPaint = Paint().apply { style = Paint.Style.FILL }
 
-            for (r in worldMap.indices) {
-                for (c in worldMap[0].indices) {
-                    mapPaint.color = if (worldMap[r][c] > 0) Color.argb(190, 90, 95, 110) else Color.argb(130, 15, 18, 26)
+            for (r in map.indices) {
+                for (c in map[0].indices) {
+                    mapPaint.color = if (map[r][c] > 0) Color.argb(190, 90, 95, 110) else Color.argb(130, 15, 18, 26)
                     canvas.drawRect(ox + c * cell, oy + r * cell, ox + (c + 1) * cell, oy + (r + 1) * cell, mapPaint)
+                }
+            }
+
+            mapPaint.color = mintOnline
+            for (kit in medKits) {
+                if (kit.active) {
+                    canvas.drawRect(
+                        ox + (kit.x * cell).toFloat() - dp(2),
+                        oy + (kit.y * cell).toFloat() - dp(2),
+                        ox + (kit.x * cell).toFloat() + dp(2),
+                        oy + (kit.y * cell).toFloat() + dp(2),
+                        mapPaint
+                    )
                 }
             }
 
