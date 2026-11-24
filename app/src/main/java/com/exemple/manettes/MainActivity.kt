@@ -55,12 +55,10 @@ import kotlin.random.Random
 class MainActivity : Activity(), InputManager.InputDeviceListener {
 
     private val bgObsidian = Color.parseColor("#050406")
-    private val smokeRed = Color.parseColor("#3A0810")
     private val glassFill = Color.argb(195, 22, 16, 20)
     private val glassFillLight = Color.argb(215, 34, 22, 28)
     private val glassEdge = Color.argb(145, 255, 195, 205)
     private val crimsonGlow = Color.parseColor("#FF2A3C")
-    private val emberRed = Color.parseColor("#D91628")
     private val mintOnline = Color.parseColor("#35F27E")
     private val iceCyan = Color.parseColor("#4CE8FF")
     private val iceGold = Color.parseColor("#FFC95C")
@@ -2081,7 +2079,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         private val detailPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.argb(135, 210, 215, 230)
             style = Paint.Style.STROKE
-            strokeWidth = dp(1.5f)
+            strokeWidth = dp(2).toFloat()
         }
 
         private val stickWellPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
