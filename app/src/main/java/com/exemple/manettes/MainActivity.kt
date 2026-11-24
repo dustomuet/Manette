@@ -74,28 +74,44 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
 
     private val gameHandler = Handler(Looper.getMainLooper())
     private var fpsActive = false
-    private var fpsScore = 0
+    private var fpsKills = 0
+    private var fpsWave = 1
     private var fpsShots = 0
     private var fpsHits = 0
-    private var playerX = 0f
-    private var playerY = 0f
-    private var aimAngleRad = -Math.PI / 2.0
+    private var playerHealth = 100
+    private var playerX = 2.5
+    private var playerY = 2.5
+    private var playerAngle = 0.0
+    private var weaponRecoil = 0f
+    private var muzzleFlashUntil = 0L
+    private var hitMarkerUntil = 0L
+    private var damageFlashUntil = 0L
     private var lastShotTimeMs = 0L
-    private var beamEndTimeMs = 0L
-    private var beamStartX = 0f
-    private var beamStartY = 0f
-    private var beamEndX = 0f
-    private var beamEndY = 0f
 
-    private data class FpsTarget(
-        var x: Float,
-        var y: Float,
-        var vx: Float,
-        var vy: Float,
-        var radiusNorm: Float
+    private val worldMap = arrayOf(
+        intArrayOf(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+        intArrayOf(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1),
+        intArrayOf(1, 0, 0, 0, 2, 0, 0, 2, 0, 0, 0, 1),
+        intArrayOf(1, 0, 0, 0, 2, 0, 0, 2, 0, 0, 0, 1),
+        intArrayOf(1, 0, 2, 2, 2, 0, 0, 0, 0, 3, 0, 1),
+        intArrayOf(1, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 1),
+        intArrayOf(1, 0, 0, 3, 0, 0, 0, 3, 3, 3, 0, 1),
+        intArrayOf(1, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 1),
+        intArrayOf(1, 0, 0, 0, 0, 2, 0, 0, 2, 0, 0, 1),
+        intArrayOf(1, 0, 2, 0, 0, 2, 0, 0, 2, 0, 0, 1),
+        intArrayOf(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1),
+        intArrayOf(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1)
     )
 
-    private val fpsTargets = mutableListOf<FpsTarget>()
+    private data class EnemyBot(
+        var x: Double,
+        var y: Double,
+        var hp: Int,
+        var moveAngle: Double,
+        var lastAttackMs: Long
+    )
+
+    private val enemyBots = mutableListOf<EnemyBot>()
 
     private var currentNavIndex = 0
     private val navItems = mutableListOf<LinearLayout>()
@@ -106,7 +122,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
 
     private lateinit var mainUiContainer: FrameLayout
     private lateinit var fpsContainer: LinearLayout
-    private lateinit var fpsArenaView: FpsArenaView
+    private lateinit var fpsArenaView: CoD3DView
     private lateinit var fpsHudText: TextView
 
     private lateinit var heroStatusDot: View
@@ -297,7 +313,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
 
         fpsContainer = buildFpsModeView().apply {
             visibility = View.GONE
-            setPadding(dp(16), dp(24), dp(16), dp(14))
+            setPadding(dp(14), dp(22), dp(14), dp(14))
         }
 
         root.addView(mainUiContainer)
@@ -827,7 +843,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         }
 
         val fpsTitle = TextView(this).apply {
-            text = "Arène de Tir FPS"
+            text = "DUSTØ OPS 3D — Combat Contre Bots"
             setTextColor(crimsonGlow)
             textSize = 15f
             typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
@@ -835,7 +851,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         fpsCard.addView(fpsTitle)
 
         val fpsDesc = TextView(this).apply {
-            text = "Teste tes joysticks et gâchettes en direct : Stick G pour bouger, Stick D pour viser, Gâchette R / A pour tirer."
+            text = "Arène 3D en vue subjective avec bots tactiques : Stick G pour avancer/strafer, Stick D pour tourner la caméra, R2 / A pour tirer."
             setTextColor(textSub)
             textSize = 12f
             setPadding(0, dp(4), 0, dp(6))
@@ -843,7 +859,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         fpsCard.addView(fpsDesc)
 
         val launchFpsBtn = Button(this)
-        styleActionButton(launchFpsBtn, "Lancer le Jeu FPS", crimsonGlow) {
+        styleActionButton(launchFpsBtn, "Jouer à DUSTØ OPS 3D (Bots)", crimsonGlow) {
             enterFpsMode()
         }
         fpsCard.addView(launchFpsBtn)
@@ -1214,12 +1230,12 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
 
         val topBar = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            background = glassCardDrawable(20, glassEdge, glassFill)
-            setPadding(dp(14), dp(10), dp(14), dp(10))
+            background = glassCardDrawable(18, glassEdge, glassFill)
+            setPadding(dp(12), dp(8), dp(12), dp(8))
         }
 
         fpsHudText = TextView(this).apply {
-            text = "SCORE 0 | TIRS 0 | TOUCHÉS 0 | PRÉCISION 0%"
+            text = "HP 100 | KILLS 0 | VAGUE 1 | BOTS 4"
             setTextColor(crimsonGlow)
             textSize = 12f
             typeface = Typeface.MONOSPACE
@@ -1227,7 +1243,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         topBar.addView(fpsHudText)
 
         val helpText = TextView(this).apply {
-            text = "Stick G : bouger | Stick D : viser | Gâchette R / A : tirer"
+            text = "Stick G : avancer/strafer | Stick D : viser 3D | R2 / A : tirer"
             setTextColor(textSub)
             textSize = 11f
             setPadding(0, dp(2), 0, 0)
@@ -1236,7 +1252,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
 
         col.addView(topBar)
 
-        fpsArenaView = FpsArenaView(this).apply {
+        fpsArenaView = CoD3DView(this).apply {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 0,
@@ -1244,7 +1260,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
             ).apply {
                 topMargin = dp(8)
             }
-            setOnClickListener { fireLaser() }
+            setOnClickListener { fire3DWeapon() }
         }
         col.addView(fpsArenaView)
 
@@ -1254,17 +1270,31 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         }
 
         val fireBtn = Button(this).apply {
-            text = "Tirer"
+            text = "Feu (R2)"
             textSize = 12f
             setTextColor(textPure)
             isAllCaps = false
             background = actionButtonDrawable(crimsonGlow)
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-                marginEnd = dp(6)
+                marginEnd = dp(4)
             }
-            setOnClickListener { fireLaser() }
+            setOnClickListener { fire3DWeapon() }
         }
         controlsRow.addView(fireBtn)
+
+        val resetMatchBtn = Button(this).apply {
+            text = "Relancer"
+            textSize = 12f
+            setTextColor(textPure)
+            isAllCaps = false
+            background = actionButtonDrawable(iceGold)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginStart = dp(4)
+                marginEnd = dp(4)
+            }
+            setOnClickListener { reset3DMatch() }
+        }
+        controlsRow.addView(resetMatchBtn)
 
         val exitBtn = Button(this).apply {
             text = "Quitter"
@@ -1273,7 +1303,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
             isAllCaps = false
             background = actionButtonDrawable(iceCyan)
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-                marginStart = dp(6)
+                marginStart = dp(4)
             }
             setOnClickListener { exitFpsMode() }
         }
@@ -1285,18 +1315,26 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
 
     private fun enterFpsMode() {
         fpsActive = true
-        fpsScore = 0
-        fpsShots = 0
-        fpsHits = 0
-        playerX = 0f
-        playerY = 0f
-        aimAngleRad = -Math.PI / 2.0
-        spawnFpsTargets(4)
+        reset3DMatch()
         mainUiContainer.visibility = View.GONE
         fpsContainer.visibility = View.VISIBLE
         gameHandler.removeCallbacks(fpsLoop)
         gameHandler.post(fpsLoop)
-        logEvent("Entrée jeu FPS")
+        logEvent("Entrée DUSTØ OPS 3D")
+    }
+
+    private fun reset3DMatch() {
+        fpsKills = 0
+        fpsWave = 1
+        fpsShots = 0
+        fpsHits = 0
+        playerHealth = 100
+        playerX = 1.6
+        playerY = 1.6
+        playerAngle = 0.65
+        weaponRecoil = 0f
+        spawnBotsWave(4)
+        updateFpsHud()
     }
 
     private fun exitFpsMode() {
@@ -1305,95 +1343,178 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         fpsContainer.visibility = View.GONE
         mainUiContainer.visibility = View.VISIBLE
         selectNav(0)
-        logEvent("Sortie jeu FPS")
+        logEvent("Sortie DUSTØ OPS 3D")
     }
 
-    private fun spawnFpsTargets(count: Int) {
-        fpsTargets.clear()
-        repeat(count) {
-            fpsTargets.add(createRandomTarget())
+    private fun isWalkable(wx: Double, wy: Double): Boolean {
+        val mx = wx.toInt()
+        val my = wy.toInt()
+        if (my !in worldMap.indices || mx !in worldMap[0].indices) return false
+        return worldMap[my][mx] == 0
+    }
+
+    private fun spawnBotsWave(count: Int) {
+        enemyBots.clear()
+        var placed = 0
+        var guard = 0
+        while (placed < count && guard < 200) {
+            guard++
+            val bx = Random.nextInt(1, worldMap[0].size - 1) + 0.5
+            val by = Random.nextInt(1, worldMap.size - 1) + 0.5
+            if (isWalkable(bx, by) && hypot(bx - playerX, by - playerY) > 3.2) {
+                enemyBots.add(
+                    EnemyBot(
+                        x = bx,
+                        y = by,
+                        hp = 100,
+                        moveAngle = Random.nextDouble(0.0, Math.PI * 2.0),
+                        lastAttackMs = System.currentTimeMillis() + Random.nextLong(600L, 1800L)
+                    )
+                )
+                placed++
+            }
         }
     }
 
-    private fun createRandomTarget(): FpsTarget {
-        val angle = Random.nextDouble(0.0, Math.PI * 2.0)
-        val dist = Random.nextDouble(0.25, 0.72).toFloat()
-        val speed = Random.nextFloat() * 0.0045f + 0.0015f
-        val dir = Random.nextDouble(0.0, Math.PI * 2.0)
-        return FpsTarget(
-            x = (cos(angle) * dist).toFloat().coerceIn(-0.75f, 0.75f),
-            y = (sin(angle) * dist).toFloat().coerceIn(-0.75f, 0.75f),
-            vx = (cos(dir) * speed).toFloat(),
-            vy = (sin(dir) * speed).toFloat(),
-            radiusNorm = 0.095f
-        )
+    private fun hasLineOfSight(x0: Double, y0: Double, x1: Double, y1: Double): Boolean {
+        val dist = hypot(x1 - x0, y1 - y0)
+        val steps = max(1, (dist / 0.12).toInt())
+        for (i in 1..steps) {
+            val t = i.toDouble() / steps
+            val sx = x0 + (x1 - x0) * t
+            val sy = y0 + (y1 - y0) * t
+            if (!isWalkable(sx, sy)) return false
+        }
+        return true
     }
 
-    private fun fireLaser() {
+    private fun fire3DWeapon() {
         if (!fpsActive) return
         val now = System.currentTimeMillis()
-        if (now - lastShotTimeMs < 130L) return
+        if (now - lastShotTimeMs < 140L) return
         lastShotTimeMs = now
+
+        if (playerHealth <= 0) {
+            reset3DMatch()
+            return
+        }
+
         fpsShots++
+        weaponRecoil = 1f
+        muzzleFlashUntil = now + 75L
 
-        val dx = cos(aimAngleRad).toFloat()
-        val dy = sin(aimAngleRad).toFloat()
-        val maxLen = 1.65f
-        var hitTarget: FpsTarget? = null
-        var bestT = maxLen
+        val dirX = cos(playerAngle)
+        val dirY = sin(playerAngle)
+        var bestBot: EnemyBot? = null
+        var bestDist = 14.0
 
-        for (target in fpsTargets) {
-            val fx = target.x - playerX
-            val fy = target.y - playerY
-            val proj = fx * dx + fy * dy
-            if (proj > 0f && proj < bestT) {
-                val closestX = playerX + dx * proj
-                val closestY = playerY + dy * proj
-                val distSq = (target.x - closestX) * (target.x - closestX) +
-                    (target.y - closestY) * (target.y - closestY)
-                val r = target.radiusNorm
-                if (distSq <= r * r) {
-                    bestT = proj
-                    hitTarget = target
+        for (bot in enemyBots) {
+            val dx = bot.x - playerX
+            val dy = bot.y - playerY
+            val dist = hypot(dx, dy)
+            if (dist < bestDist && dist > 0.1) {
+                val dot = (dx * dirX + dy * dirY) / dist
+                val angleDiff = abs(atan2(dirX * dy - dirY * dx, dirX * dx + dirY * dy))
+                val hitCone = max(0.08, 0.34 / dist)
+                if (dot > 0.0 && angleDiff <= hitCone && hasLineOfSight(playerX, playerY, bot.x, bot.y)) {
+                    bestDist = dist
+                    bestBot = bot
                 }
             }
         }
 
-        beamStartX = playerX
-        beamStartY = playerY
-        beamEndX = (playerX + dx * bestT).coerceIn(-1f, 1f)
-        beamEndY = (playerY + dy * bestT).coerceIn(-1f, 1f)
-        beamEndTimeMs = now + 95L
-
-        if (hitTarget != null) {
+        if (bestBot != null) {
             fpsHits++
-            fpsScore += 100
-            fpsTargets.remove(hitTarget)
-            fpsTargets.add(createRandomTarget())
+            hitMarkerUntil = now + 150L
+            bestBot.hp -= 50
+            if (bestBot.hp <= 0) {
+                enemyBots.remove(bestBot)
+                fpsKills++
+                if (vibrationEnabled) pulseShortTap()
+            }
+            if (enemyBots.isEmpty()) {
+                fpsWave++
+                playerHealth = min(100, playerHealth + 25)
+                spawnBotsWave(min(7, 3 + fpsWave))
+            }
         }
         updateFpsHud()
     }
 
+    private fun pulseShortTap() {
+        val d = gamepads().firstOrNull()
+        if (d != null && Build.VERSION.SDK_INT >= 31) {
+            try {
+                d.vibratorManager?.defaultVibrator?.vibrate(
+                    VibrationEffect.createOneShot(55L, 180)
+                )
+            } catch (_: Exception) {
+            }
+        }
+    }
+
     private fun stepFpsSimulation() {
+        val now = System.currentTimeMillis()
+        weaponRecoil = max(0f, weaponRecoil - 0.14f)
+
+        if (playerHealth <= 0) {
+            if (trigR > 0.7f) reset3DMatch()
+            updateFpsHud()
+            if (::fpsArenaView.isInitialized) fpsArenaView.invalidate()
+            return
+        }
+
         val move = corriger(rawLX, rawLY, offLX, offLY, dzL)
-        playerX = (playerX + move.first * 0.022f).coerceIn(-0.82f, 0.82f)
-        playerY = (playerY + move.second * 0.022f).coerceIn(-0.82f, 0.82f)
+        val look = corriger(rawRX, rawRY, offRX, offRY, dzR)
 
-        val aim = corriger(rawRX, rawRY, offRX, offRY, dzR)
-        val aimMag = hypot(aim.first.toDouble(), aim.second.toDouble())
-        if (aimMag > 0.12) {
-            aimAngleRad = atan2(aim.second.toDouble(), aim.first.toDouble())
+        playerAngle += look.first * 0.068
+        val forward = -move.second * 0.062
+        val strafe = move.first * 0.052
+
+        val stepX = cos(playerAngle) * forward - sin(playerAngle) * strafe
+        val stepY = sin(playerAngle) * forward + cos(playerAngle) * strafe
+        val margin = 0.24
+
+        if (isWalkable(playerX + stepX + (if (stepX > 0) margin else -margin), playerY)) {
+            playerX += stepX
+        }
+        if (isWalkable(playerX, playerY + stepY + (if (stepY > 0) margin else -margin))) {
+            playerY += stepY
         }
 
-        if (trigR > 0.65f) {
-            fireLaser()
+        if (trigR > 0.62f) {
+            fire3DWeapon()
         }
 
-        for (t in fpsTargets) {
-            t.x += t.vx
-            t.y += t.vy
-            if (t.x < -0.78f || t.x > 0.78f) t.vx = -t.vx
-            if (t.y < -0.78f || t.y > 0.78f) t.vy = -t.vy
+        for (bot in enemyBots) {
+            val dx = playerX - bot.x
+            val dy = playerY - bot.y
+            val dist = hypot(dx, dy)
+            val seesPlayer = dist < 8.5 && hasLineOfSight(bot.x, bot.y, playerX, playerY)
+
+            if (seesPlayer) {
+                bot.moveAngle = atan2(dy, dx)
+                if (dist > 1.8) {
+                    val bvx = cos(bot.moveAngle) * 0.022
+                    val bvy = sin(bot.moveAngle) * 0.022
+                    if (isWalkable(bot.x + bvx, bot.y)) bot.x += bvx
+                    if (isWalkable(bot.x, bot.y + bvy)) bot.y += bvy
+                }
+                if (now - bot.lastAttackMs > 1250L) {
+                    bot.lastAttackMs = now
+                    playerHealth = max(0, playerHealth - 9)
+                    damageFlashUntil = now + 180L
+                }
+            } else {
+                val bvx = cos(bot.moveAngle) * 0.018
+                val bvy = sin(bot.moveAngle) * 0.018
+                if (isWalkable(bot.x + bvx, bot.y + bvy)) {
+                    bot.x += bvx
+                    bot.y += bvy
+                } else {
+                    bot.moveAngle += Random.nextDouble(1.1, 2.5)
+                }
+            }
         }
 
         updateFpsHud()
@@ -1405,7 +1526,11 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
     private fun updateFpsHud() {
         if (!::fpsHudText.isInitialized) return
         val acc = if (fpsShots > 0) (fpsHits * 100) / fpsShots else 0
-        fpsHudText.text = "SCORE $fpsScore | TIRS $fpsShots | TOUCHÉS $fpsHits | PRÉCISION $acc%"
+        fpsHudText.text = if (playerHealth > 0) {
+            "HP $playerHealth% | KILLS $fpsKills | VAGUE $fpsWave | BOTS ${enemyBots.size} | PRÉC $acc%"
+        } else {
+            "ÉLIMINÉ — Appuie sur R2 / A ou Relancer (Kills : $fpsKills)"
+        }
     }
 
     private fun toggleBtBridge() {
@@ -1700,7 +1825,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
                         ev.keyCode == KeyEvent.KEYCODE_DPAD_CENTER ||
                         ev.keyCode == KeyEvent.KEYCODE_ENTER)
                 ) {
-                    fireLaser()
+                    fire3DWeapon()
                 }
             } else if (ev.action == KeyEvent.ACTION_UP) {
                 pressed.remove(name)
@@ -2183,97 +2308,271 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         }
     }
 
-    private inner class FpsArenaView(context: Context) : View(context) {
-        private val bgPaint = Paint().apply {
-            color = Color.parseColor("#0D090C")
-            style = Paint.Style.FILL
-        }
-
-        private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = crimsonGlow
+    private inner class CoD3DView(context: Context) : View(context) {
+        private val skyPaint = Paint().apply { style = Paint.Style.FILL }
+        private val floorPaint = Paint().apply { style = Paint.Style.FILL }
+        private val wallPaint = Paint().apply { style = Paint.Style.FILL }
+        private val botPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+        private val botOutlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.BLACK
             style = Paint.Style.STROKE
             strokeWidth = dp(2).toFloat()
         }
-
-        private val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.parseColor("#2A131A")
-            style = Paint.Style.STROKE
-            strokeWidth = dp(1).toFloat()
-        }
-
-        private val playerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        private val hudPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = iceCyan
-            style = Paint.Style.FILL
-        }
-
-        private val aimLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.argb(140, 255, 42, 60)
-            style = Paint.Style.STROKE
-            strokeWidth = dp(1).toFloat()
-            pathEffect = DashPathEffect(floatArrayOf(dp(5).toFloat(), dp(5).toFloat()), 0f)
-        }
-
-        private val beamPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = crimsonGlow
-            style = Paint.Style.STROKE
-            strokeWidth = dp(3).toFloat()
-        }
-
-        private val targetOuterPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = crimsonGlow
             style = Paint.Style.STROKE
             strokeWidth = dp(2).toFloat()
         }
-
-        private val targetCorePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.argb(80, 255, 42, 60)
+        private val gunPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+        private val flashPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.argb(210, 255, 210, 90)
             style = Paint.Style.FILL
         }
+        private val overlayPaint = Paint().apply { style = Paint.Style.FILL }
 
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
             val w = width.toFloat()
             val h = height.toFloat()
-            val pad = dp(10).toFloat()
-            val arenaSize = min(w - pad * 2f, h - pad * 2f)
-            if (arenaSize <= dp(24)) return
+            if (w <= 20f || h <= 20f) return
 
-            val left = (w - arenaSize) / 2f
-            val top = (h - arenaSize) / 2f
-            val half = arenaSize / 2f
-            val cx = left + half
-            val cy = top + half
+            val horizon = h * 0.5f
+            skyPaint.shader = LinearGradient(
+                0f, 0f, 0f, horizon,
+                intArrayOf(Color.parseColor("#0B101D"), Color.parseColor("#26121A")),
+                null,
+                Shader.TileMode.CLAMP
+            )
+            floorPaint.shader = LinearGradient(
+                0f, horizon, 0f, h,
+                intArrayOf(Color.parseColor("#18151A"), Color.parseColor("#2E2A33")),
+                null,
+                Shader.TileMode.CLAMP
+            )
+            canvas.drawRect(0f, 0f, w, horizon, skyPaint)
+            canvas.drawRect(0f, horizon, w, h, floorPaint)
 
-            canvas.drawRoundRect(left, top, left + arenaSize, top + arenaSize, dp(16).toFloat(), dp(16).toFloat(), bgPaint)
-            canvas.drawLine(cx, top, cx, top + arenaSize, gridPaint)
-            canvas.drawLine(left, cy, left + arenaSize, cy, gridPaint)
-            canvas.drawRoundRect(left, top, left + arenaSize, top + arenaSize, dp(16).toFloat(), dp(16).toFloat(), borderPaint)
+            val rayCount = 96
+            val fov = Math.toRadians(66.0)
+            val sliceW = w / rayCount
+            val zBuffer = DoubleArray(rayCount) { 20.0 }
 
-            for (t in fpsTargets) {
-                val tx = cx + t.x * half
-                val ty = cy + t.y * half
-                val tr = max(dp(12).toFloat(), t.radiusNorm * half)
-                canvas.drawCircle(tx, ty, tr, targetCorePaint)
-                canvas.drawCircle(tx, ty, tr, targetOuterPaint)
+            for (i in 0 until rayCount) {
+                val cameraX = (2.0 * i / rayCount) - 1.0
+                val rayAngle = playerAngle + atan2(cameraX * kotlin.math.tan(fov / 2.0), 1.0)
+                val rayDirX = cos(rayAngle)
+                val rayDirY = sin(rayAngle)
+
+                var mapX = playerX.toInt()
+                var mapY = playerY.toInt()
+
+                val deltaDistX = if (rayDirX == 0.0) 1e30 else abs(1.0 / rayDirX)
+                val deltaDistY = if (rayDirY == 0.0) 1e30 else abs(1.0 / rayDirY)
+
+                var stepX: Int
+                var sideDistX: Double
+                if (rayDirX < 0) {
+                    stepX = -1
+                    sideDistX = (playerX - mapX) * deltaDistX
+                } else {
+                    stepX = 1
+                    sideDistX = (mapX + 1.0 - playerX) * deltaDistX
+                }
+
+                var stepY: Int
+                var sideDistY: Double
+                if (rayDirY < 0) {
+                    stepY = -1
+                    sideDistY = (playerY - mapY) * deltaDistY
+                } else {
+                    stepY = 1
+                    sideDistY = (mapY + 1.0 - playerY) * deltaDistY
+                }
+
+                var hitType = 0
+                var side = 0
+                var guard = 0
+                while (hitType == 0 && guard < 40) {
+                    guard++
+                    if (sideDistX < sideDistY) {
+                        sideDistX += deltaDistX
+                        mapX += stepX
+                        side = 0
+                    } else {
+                        sideDistY += deltaDistY
+                        mapY += stepY
+                        side = 1
+                    }
+                    if (mapY !in worldMap.indices || mapX !in worldMap[0].indices) {
+                        hitType = 1
+                    } else if (worldMap[mapY][mapX] > 0) {
+                        hitType = worldMap[mapY][mapX]
+                    }
+                }
+
+                val perpWallDist = max(
+                    0.15,
+                    if (side == 0) (sideDistX - deltaDistX) else (sideDistY - deltaDistY)
+                )
+                zBuffer[i] = perpWallDist
+
+                val lineHeight = (h / perpWallDist).toFloat()
+                val drawStart = max(0f, horizon - lineHeight / 2f)
+                val drawEnd = min(h, horizon + lineHeight / 2f)
+
+                val shade = (1.0 / (1.0 + perpWallDist * 0.22)).toFloat().coerceIn(0.18f, 1.0f) *
+                    (if (side == 1) 0.78f else 1.0f)
+
+                val baseR = when (hitType) {
+                    2 -> 175
+                    3 -> 75
+                    else -> 115
+                }
+                val baseG = when (hitType) {
+                    2 -> 42
+                    3 -> 115
+                    else -> 122
+                }
+                val baseB = when (hitType) {
+                    2 -> 56
+                    3 -> 145
+                    else -> 136
+                }
+
+                wallPaint.color = Color.rgb(
+                    (baseR * shade).toInt(),
+                    (baseG * shade).toInt(),
+                    (baseB * shade).toInt()
+                )
+                canvas.drawRect(i * sliceW, drawStart, (i + 1) * sliceW + 0.8f, drawEnd, wallPaint)
             }
 
-            val px = cx + playerX * half
-            val py = cy + playerY * half
-            val aimX = px + cos(aimAngleRad).toFloat() * dp(44).toFloat()
-            val aimY = py + sin(aimAngleRad).toFloat() * dp(44).toFloat()
+            val dirX = cos(playerAngle)
+            val dirY = sin(playerAngle)
+            val planeScale = kotlin.math.tan(fov / 2.0)
+            val planeX = -dirY * planeScale
+            val planeY = dirX * planeScale
 
-            canvas.drawLine(px, py, aimX, aimY, aimLinePaint)
-            canvas.drawCircle(aimX, aimY, dp(5).toFloat(), targetOuterPaint)
+            val sortedBots = enemyBots.sortedByDescending { hypot(it.x - playerX, it.y - playerY) }
+            for (bot in sortedBots) {
+                val spriteX = bot.x - playerX
+                val spriteY = bot.y - playerY
+                val invDet = 1.0 / (planeX * dirY - dirX * planeY)
+                val transformX = invDet * (dirY * spriteX - dirX * spriteY)
+                val transformY = invDet * (-planeY * spriteX + planeX * spriteY)
 
-            if (System.currentTimeMillis() < beamEndTimeMs) {
-                val bx1 = cx + beamStartX * half
-                val by1 = cy + beamStartY * half
-                val bx2 = cx + beamEndX * half
-                val by2 = cy + beamEndY * half
-                canvas.drawLine(bx1, by1, bx2, by2, beamPaint)
+                if (transformY > 0.2) {
+                    val spriteScreenX = ((w / 2.0) * (1.0 + transformX / transformY)).toFloat()
+                    val spriteHeight = abs((h / transformY)).toFloat()
+                    val spriteWidth = spriteHeight * 0.46f
+                    val centerSlice = ((spriteScreenX / w) * rayCount).toInt()
+
+                    if (centerSlice in zBuffer.indices && transformY < zBuffer[centerSlice]) {
+                        val top = horizon - spriteHeight * 0.42f
+                        val bottom = horizon + spriteHeight * 0.5f
+
+                        botPaint.color = Color.parseColor("#2B313D")
+                        val torso = RectF(
+                            spriteScreenX - spriteWidth * 0.5f,
+                            top + spriteHeight * 0.22f,
+                            spriteScreenX + spriteWidth * 0.5f,
+                            bottom
+                        )
+                        canvas.drawRoundRect(torso, dp(6).toFloat(), dp(6).toFloat(), botPaint)
+                        canvas.drawRoundRect(torso, dp(6).toFloat(), dp(6).toFloat(), botOutlinePaint)
+
+                        botPaint.color = Color.parseColor("#181B22")
+                        val headR = spriteWidth * 0.34f
+                        val headCy = top + spriteHeight * 0.14f
+                        canvas.drawCircle(spriteScreenX, headCy, headR, botPaint)
+                        canvas.drawCircle(spriteScreenX, headCy, headR, botOutlinePaint)
+
+                        botPaint.color = crimsonGlow
+                        canvas.drawRect(
+                            spriteScreenX - headR * 0.65f,
+                            headCy - headR * 0.2f,
+                            spriteScreenX + headR * 0.65f,
+                            headCy + headR * 0.2f,
+                            botPaint
+                        )
+
+                        val hpBarW = spriteWidth * 0.9f
+                        val hpRatio = (bot.hp / 100f).coerceIn(0f, 1f)
+                        botPaint.color = Color.DKGRAY
+                        canvas.drawRect(spriteScreenX - hpBarW / 2f, top - dp(10), spriteScreenX + hpBarW / 2f, top - dp(4), botPaint)
+                        botPaint.color = crimsonGlow
+                        canvas.drawRect(spriteScreenX - hpBarW / 2f, top - dp(10), spriteScreenX - hpBarW / 2f + hpBarW * hpRatio, top - dp(4), botPaint)
+                    }
+                }
             }
 
-            canvas.drawCircle(px, py, dp(8).toFloat(), playerPaint)
+            val cx = w / 2f
+            val cy = h / 2f
+            hudPaint.color = if (System.currentTimeMillis() < hitMarkerUntil) crimsonGlow else iceCyan
+            val gap = dp(7).toFloat()
+            val arm = dp(14).toFloat()
+            canvas.drawLine(cx - arm, cy, cx - gap, cy, hudPaint)
+            canvas.drawLine(cx + gap, cy, cx + arm, cy, hudPaint)
+            canvas.drawLine(cx, cy - arm, cx, cy - gap, hudPaint)
+            canvas.drawLine(cx, cy + gap, cx, cy + arm, hudPaint)
+
+            val kickY = weaponRecoil * dp(18).toFloat()
+            val kickX = weaponRecoil * dp(8).toFloat()
+            if (System.currentTimeMillis() < muzzleFlashUntil) {
+                canvas.drawCircle(w * 0.68f + kickX, h * 0.68f + kickY, dp(26).toFloat(), flashPaint)
+            }
+
+            gunPaint.color = Color.parseColor("#181B24")
+            val barrel = Path().apply {
+                moveTo(w * 0.64f + kickX, h * 0.67f + kickY)
+                lineTo(w * 0.72f + kickX, h * 0.67f + kickY)
+                lineTo(w * 0.86f + kickX, h)
+                lineTo(w * 0.56f + kickX, h)
+                close()
+            }
+            canvas.drawPath(barrel, gunPaint)
+
+            gunPaint.color = crimsonGlow
+            canvas.drawRect(
+                w * 0.665f + kickX,
+                h * 0.69f + kickY,
+                w * 0.695f + kickX,
+                h * 0.76f + kickY,
+                gunPaint
+            )
+
+            drawMiniMap(canvas)
+
+            if (System.currentTimeMillis() < damageFlashUntil) {
+                overlayPaint.color = Color.argb(95, 255, 25, 45)
+                canvas.drawRect(0f, 0f, w, h, overlayPaint)
+            }
+        }
+
+        private fun drawMiniMap(canvas: Canvas) {
+            val cell = dp(8).toFloat()
+            val ox = dp(10).toFloat()
+            val oy = dp(10).toFloat()
+            val mapPaint = Paint().apply { style = Paint.Style.FILL }
+
+            for (r in worldMap.indices) {
+                for (c in worldMap[0].indices) {
+                    mapPaint.color = if (worldMap[r][c] > 0) Color.argb(190, 90, 95, 110) else Color.argb(130, 15, 18, 26)
+                    canvas.drawRect(ox + c * cell, oy + r * cell, ox + (c + 1) * cell, oy + (r + 1) * cell, mapPaint)
+                }
+            }
+
+            mapPaint.color = crimsonGlow
+            for (bot in enemyBots) {
+                canvas.drawCircle(ox + (bot.x * cell).toFloat(), oy + (bot.y * cell).toFloat(), dp(3).toFloat(), mapPaint)
+            }
+
+            val px = ox + (playerX * cell).toFloat()
+            val py = oy + (playerY * cell).toFloat()
+            mapPaint.color = mintOnline
+            canvas.drawCircle(px, py, dp(3).toFloat(), mapPaint)
+            hudPaint.color = mintOnline
+            canvas.drawLine(px, py, px + cos(playerAngle).toFloat() * dp(9), py + sin(playerAngle).toFloat() * dp(9), hudPaint)
         }
     }
 
