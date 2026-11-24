@@ -10,6 +10,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.SharedPreferences
 import android.content.res.ColorStateList
+import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.DashPathEffect
@@ -20,6 +21,8 @@ import android.graphics.RadialGradient
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
+import android.graphics.drawable.BitmapDrawable
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.hardware.input.InputManager
 import android.media.AudioAttributes
@@ -40,6 +43,7 @@ import android.view.View
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
@@ -107,9 +111,17 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
     private var hasPrevAngleL = false
     private var ghostInputCount = 0
 
-    // Armes, arènes & modes de bots dans DUSTØ OPS 3D
+    // Armes, arènes & modes de bots dans DUSTØ OPS 3D (style COD Mobile)
     private val weaponModes = listOf("ASSAUT", "RAFALE", "LOURD")
+    private val weaponMagSizes = mapOf("ASSAUT" to 30, "RAFALE" to 24, "LOURD" to 8)
     private var currentWeaponIndex = 0
+    private var ammoInMag = 30
+    private var isReloading = false
+    private var reloadEndMs = 0L
+    private var touchAdsActive = false
+    private var crouchSlideActive = false
+    private var slideBoost = 0.0
+
     private val botModes = listOf("AGRESSIF", "PATROUILLE", "ENTRAINEMENT")
     private var currentBotModeIndex = 0
     private val arenaNames = listOf("BUNKER ROUGE", "LABYRINTHE NÉON", "ENTREPÔT TACTIQUE")
@@ -191,9 +203,9 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
     private var bestKills = 0
     private var bestWave = 1
     private var playerHealth = 100
-    private var weaponHeat = 0f // 0..100
+    private var weaponHeat = 0f
     private var weaponOverheated = false
-    private var focusCharge = 100f // 0..100
+    private var focusCharge = 100f
     private var slowMoUntil = 0L
     private var playerX = 2.5
     private var playerY = 2.5
@@ -298,6 +310,20 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
     }
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+
+    private fun findLogoDrawable(): Drawable? {
+        return try {
+            val resId = resources.getIdentifier("ic_dusto_logo", "drawable", packageName)
+            if (resId != 0) {
+                @Suppress("DEPRECATION")
+                resources.getDrawable(resId)
+            } else {
+                null
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
 
     private fun glassCardDrawable(radiusDp: Int = 22, borderColor: Int = glassEdge, fillColor: Int = glassFill): GradientDrawable {
         val effectiveFill = if (ecoDarkMode) Color.argb(235, 10, 9, 12) else fillColor
@@ -533,13 +559,29 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
             setPadding(dp(2), dp(2), dp(2), dp(2))
         }
 
-        val padBadge = TextView(this).apply {
-            text = "🎮"
-            textSize = 26f
-            setTextColor(crimsonGlow)
-            setPadding(0, 0, dp(10), 0)
+        val logoDrawable = findLogoDrawable()
+        if (logoDrawable != null) {
+            val logoView = ImageView(this).apply {
+                setImageDrawable(logoDrawable)
+                scaleType = ImageView.ScaleType.FIT_CENTER
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(12).toFloat()
+                    setStroke(dp(1), crimsonGlow)
+                }
+                layoutParams = LinearLayout.LayoutParams(dp(44), dp(44)).apply {
+                    marginEnd = dp(10)
+                }
+            }
+            row.addView(logoView)
+        } else {
+            val padBadge = TextView(this).apply {
+                text = "🎮"
+                textSize = 26f
+                setTextColor(crimsonGlow)
+                setPadding(0, 0, dp(10), 0)
+            }
+            row.addView(padBadge)
         }
-        row.addView(padBadge)
 
         val titleCol = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1152,6 +1194,8 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         val weaponBtn = Button(this)
         styleActionButton(weaponBtn, "Arme : ${weaponModes[currentWeaponIndex]}", iceGold) {
             currentWeaponIndex = (currentWeaponIndex + 1) % weaponModes.size
+            ammoInMag = weaponMagSizes[weaponModes[currentWeaponIndex]] ?: 30
+            isReloading = false
             weaponBtn.text = "Arme : ${weaponModes[currentWeaponIndex]}"
             refreshGameSummary()
         }
@@ -1592,7 +1636,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         }
 
         fpsHudText = TextView(this).apply {
-            text = "HP 100 | KILLS 0 | VAGUE 1 | BOTS 4"
+            text = "HP 100 | MUN 30/30 | KILLS 0 | VAGUE 1"
             setTextColor(crimsonGlow)
             textSize = 12f
             typeface = Typeface.MONOSPACE
@@ -1600,7 +1644,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         topBar.addView(fpsHudText)
 
         val helpText = TextView(this).apply {
-            text = "Stick G : bouger | Stick D : viser | L2 : ADS | R2 / A : tirer | X : Slow-Mo"
+            text = "COD Mobile HUD : Stick G/Tactile déplacer • Stick D/Glisser viser • ADS • Rech. • Gliss. • Feu"
             setTextColor(textSub)
             textSize = 11f
             setPadding(0, dp(2), 0, 0)
@@ -1617,9 +1661,71 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
             ).apply {
                 topMargin = dp(8)
             }
-            setOnClickListener { fire3DWeapon() }
         }
         col.addView(fpsArenaView)
+
+        val tacticalRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(6), 0, 0)
+        }
+
+        val adsBtn = Button(this).apply {
+            text = "ADS"
+            textSize = 11f
+            setTextColor(textPure)
+            isAllCaps = false
+            background = actionButtonDrawable(iceCyan)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginEnd = dp(3)
+            }
+            setOnClickListener {
+                touchAdsActive = !touchAdsActive
+                text = if (touchAdsActive) "ADS [ON]" else "ADS"
+            }
+        }
+        tacticalRow.addView(adsBtn)
+
+        val reloadBtn = Button(this).apply {
+            text = "Rech."
+            textSize = 11f
+            setTextColor(textPure)
+            isAllCaps = false
+            background = actionButtonDrawable(iceGold)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginStart = dp(3)
+                marginEnd = dp(3)
+            }
+            setOnClickListener { startReload() }
+        }
+        tacticalRow.addView(reloadBtn)
+
+        val slideBtn = Button(this).apply {
+            text = "Gliss."
+            textSize = 11f
+            setTextColor(textPure)
+            isAllCaps = false
+            background = actionButtonDrawable(mintOnline)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginStart = dp(3)
+                marginEnd = dp(3)
+            }
+            setOnClickListener { triggerCrouchSlide() }
+        }
+        tacticalRow.addView(slideBtn)
+
+        val slowMoBtn = Button(this).apply {
+            text = "Slow-Mo"
+            textSize = 11f
+            setTextColor(textPure)
+            isAllCaps = false
+            background = actionButtonDrawable(iceCyan)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginStart = dp(3)
+            }
+            setOnClickListener { activateSlowMo() }
+        }
+        tacticalRow.addView(slowMoBtn)
+        col.addView(tacticalRow)
 
         val controlsRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -1632,26 +1738,12 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
             setTextColor(textPure)
             isAllCaps = false
             background = actionButtonDrawable(crimsonGlow)
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.3f).apply {
                 marginEnd = dp(4)
             }
             setOnClickListener { fire3DWeapon() }
         }
         controlsRow.addView(fireBtn)
-
-        val slowMoBtn = Button(this).apply {
-            text = "Slow-Mo"
-            textSize = 12f
-            setTextColor(textPure)
-            isAllCaps = false
-            background = actionButtonDrawable(iceCyan)
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-                marginStart = dp(3)
-                marginEnd = dp(3)
-            }
-            setOnClickListener { activateSlowMo() }
-        }
-        controlsRow.addView(slowMoBtn)
 
         val resetMatchBtn = Button(this).apply {
             text = "Relancer"
@@ -1683,6 +1775,26 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         col.addView(controlsRow)
         return col
     }
+
+    private fun startReload() {
+        val maxAmmo = weaponMagSizes[weaponModes[currentWeaponIndex]] ?: 30
+        if (isReloading || ammoInMag >= maxAmmo) return
+        isReloading = true
+        reloadEndMs = System.currentTimeMillis() + 1150L
+        playSynthTone(420.0, 90, 0.2f)
+        pushKillFeed("⟳ RECHARGEMENT...")
+    }
+
+    private fun triggerCrouchSlide() {
+        crouchSlideActive = !crouchSlideActive
+        if (crouchSlideActive) {
+            slideBoost = 0.14
+            playSynthTone(260.0, 75, 0.18f)
+            pushKillFeed("↘ GLISSADE / ACCROUPI")
+        }
+    }
+
+    private fun isAdsEngaged(): Boolean = touchAdsActive || effectiveTrigger(trigL) > 0.45f
 
     private fun activateSlowMo() {
         val now = System.currentTimeMillis()
@@ -1717,6 +1829,11 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         fpsShots = 0
         fpsHits = 0
         fpsHeadshots = 0
+        ammoInMag = weaponMagSizes[weaponModes[currentWeaponIndex]] ?: 30
+        isReloading = false
+        crouchSlideActive = false
+        touchAdsActive = false
+        slideBoost = 0.0
         weaponHeat = 0f
         weaponOverheated = false
         focusCharge = 100f
@@ -1816,7 +1933,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
     private fun fire3DWeapon() {
         if (!fpsActive) return
         val now = System.currentTimeMillis()
-        if (weaponOverheated) return
+        if (weaponOverheated || isReloading) return
 
         val weapon = weaponModes[currentWeaponIndex]
         val cooldown = when (weapon) {
@@ -1832,6 +1949,12 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
             return
         }
 
+        if (ammoInMag <= 0) {
+            startReload()
+            return
+        }
+
+        ammoInMag--
         fpsShots++
         weaponHeat = min(100f, weaponHeat + if (weapon == "LOURD") 19f else 11f)
         if (weaponHeat >= 100f) {
@@ -1849,7 +1972,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         var bestBot: EnemyBot? = null
         var bestDist = 14.0
         var isCrit = false
-        val adsBonus = if (effectiveTrigger(trigL) > 0.45f) 0.72 else 1.0
+        val adsBonus = if (isAdsEngaged()) 0.72 else 1.0
 
         for (bot in enemyBots) {
             val dx = bot.x - playerX
@@ -1923,6 +2046,9 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         } else {
             streakKills = 0
         }
+        if (ammoInMag == 0 && !isReloading) {
+            startReload()
+        }
         updateFpsHud()
     }
 
@@ -1979,8 +2105,15 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         val now = System.currentTimeMillis()
         val timeFactor = if (now < slowMoUntil) 0.45 else 1.0
         weaponRecoil = max(0f, weaponRecoil - 0.14f)
+        slideBoost = max(0.0, slideBoost - 0.008)
 
-        // Refroidissement de l'arme & recharge concentration
+        if (isReloading && now >= reloadEndMs) {
+            isReloading = false
+            ammoInMag = weaponMagSizes[weaponModes[currentWeaponIndex]] ?: 30
+            playSynthTone(690.0, 65, 0.22f)
+            pushKillFeed("✓ CHARGEUR PLEIN")
+        }
+
         weaponHeat = max(0f, weaponHeat - if (weaponOverheated) 0.9f else 0.65f)
         if (weaponOverheated && weaponHeat <= 15f) {
             weaponOverheated = false
@@ -2003,12 +2136,14 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
 
         val move = corriger(rawLX, rawLY, offLX, offLY, dzL)
         val look = corriger(rawRX, rawRY, offRX, offRY, dzR)
-        val adsActive = effectiveTrigger(trigL) > 0.45f
+        val adsActive = isAdsEngaged()
         val lookScale = (if (adsActive) 0.038 else 0.068) * (if (now < slowMoUntil) 0.7 else 1.0)
         val yDir = if (invertLookY) -1.0 else 1.0
 
         playerAngle += look.first * lookScale * yDir
-        val moveScale = (if (adsActive) 0.042 else 0.062) * (if (now < slowMoUntil) 0.75 else 1.0)
+        val crouchFactor = if (crouchSlideActive) 0.68 else 1.0
+        val moveScale = ((if (adsActive) 0.042 else 0.062) * crouchFactor + slideBoost) *
+            (if (now < slowMoUntil) 0.75 else 1.0)
         val forward = -move.second * moveScale
         val strafe = move.first * (moveScale * 0.85)
 
@@ -2023,7 +2158,6 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
             playerY += stepY
         }
 
-        // Ramassage caisses de soin
         for (kit in medKits) {
             if (kit.active && hypot(kit.x - playerX, kit.y - playerY) < 0.65) {
                 kit.active = false
@@ -2095,11 +2229,12 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
     private fun updateFpsHud() {
         if (!::fpsHudText.isInitialized) return
         val acc = if (fpsShots > 0) (fpsHits * 100) / fpsShots else 0
+        val maxAmmo = weaponMagSizes[weaponModes[currentWeaponIndex]] ?: 30
+        val ammoLabel = if (isReloading) "RECH..." else "$ammoInMag/$maxAmmo"
         val heatPct = weaponHeat.toInt()
-        val focusPct = focusCharge.toInt()
         val duelTag = if (duelModeActive) " | J${duelPlayerTurn} ($duelP1Kills/$duelP2Kills)" else ""
         fpsHudText.text = if (playerHealth > 0) {
-            "HP $playerHealth% | KILLS $fpsKills | V$fpsWave | CHAUFFE $heatPct% | FOC $focusPct% | PRÉC $acc%$duelTag"
+            "HP $playerHealth% | MUN $ammoLabel | KILLS $fpsKills | V$fpsWave | CHAUFFE $heatPct% | PRÉC $acc%$duelTag"
         } else {
             "ÉLIMINÉ — Appuie sur R2 / A ou Relancer (Kills : $fpsKills | Record : $bestKills)"
         }
@@ -2419,7 +2554,9 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
                         KeyEvent.KEYCODE_BUTTON_R1,
                         KeyEvent.KEYCODE_DPAD_CENTER,
                         KeyEvent.KEYCODE_ENTER -> fire3DWeapon()
-                        KeyEvent.KEYCODE_BUTTON_X -> activateSlowMo()
+                        KeyEvent.KEYCODE_BUTTON_X -> startReload()
+                        KeyEvent.KEYCODE_BUTTON_B -> triggerCrouchSlide()
+                        KeyEvent.KEYCODE_BUTTON_Y -> activateSlowMo()
                     }
                 }
                 if (turboEnabled && now - lastTurboMs > 85L &&
@@ -2831,6 +2968,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         private var rx = 0f
         private var ry = 0f
         private var glowColor = crimsonGlow
+        private val customLogoBitmap: Bitmap? = (findLogoDrawable() as? BitmapDrawable)?.bitmap
 
         private val bodyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.FILL
@@ -2863,6 +3001,8 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
             style = Paint.Style.FILL
         }
 
+        private val logoBitmapPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+
         fun setGlowColor(col: Int) {
             glowColor = col
             invalidate()
@@ -2881,6 +3021,13 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
             val w = width.toFloat()
             val h = height.toFloat()
             if (w <= 0f || h <= 0f) return
+
+            if (customLogoBitmap != null && !customLogoBitmap.isRecycled) {
+                val side = min(w * 0.62f, h * 0.94f)
+                val dst = RectF((w - side) / 2f, (h - side) / 2f, (w + side) / 2f, (h + side) / 2f)
+                canvas.drawBitmap(customLogoBitmap, null, dst, logoBitmapPaint)
+                return
+            }
 
             val cx = w / 2f
             val cy = h * 0.54f
@@ -2955,6 +3102,10 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
     }
 
     private inner class CoD3DView(context: Context) : View(context) {
+        private var lastTouchX = 0f
+        private var lastTouchY = 0f
+        private var hasTouchDrag = false
+
         private val skyPaint = Paint().apply { style = Paint.Style.FILL }
         private val floorPaint = Paint().apply { style = Paint.Style.FILL }
         private val wallPaint = Paint().apply { style = Paint.Style.FILL }
@@ -2981,6 +3132,37 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         }
         private val overlayPaint = Paint().apply { style = Paint.Style.FILL }
 
+        override fun onTouchEvent(event: MotionEvent): Boolean {
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    lastTouchX = event.x
+                    lastTouchY = event.y
+                    hasTouchDrag = true
+                    return true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (hasTouchDrag) {
+                        val dx = event.x - lastTouchX
+                        val dy = event.y - lastTouchY
+                        lastTouchX = event.x
+                        lastTouchY = event.y
+                        val sens = if (isAdsEngaged()) 0.0045 else 0.0075
+                        playerAngle += dx * sens
+                        if (abs(dy) > 1.5f && !isWalkable(playerX, playerY)) {
+                            // garde
+                        }
+                        invalidate()
+                    }
+                    return true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    hasTouchDrag = false
+                    return true
+                }
+            }
+            return super.onTouchEvent(event)
+        }
+
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
             val w = width.toFloat()
@@ -2988,7 +3170,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
             if (w <= 20f || h <= 20f) return
 
             val map = currentWorldMap()
-            val horizon = h * 0.5f
+            val horizon = h * (if (crouchSlideActive) 0.56f else 0.5f)
             skyPaint.shader = LinearGradient(
                 0f, 0f, 0f, horizon,
                 intArrayOf(Color.parseColor("#0B101D"), Color.parseColor("#26121A")),
@@ -3005,7 +3187,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
             canvas.drawRect(0f, horizon, w, h, floorPaint)
 
             val rayCount = 96
-            val fovDeg = if (effectiveTrigger(trigL) > 0.45f) 46.0 else 66.0
+            val fovDeg = if (isAdsEngaged()) 44.0 else 66.0
             val fov = Math.toRadians(fovDeg)
             val sliceW = w / rayCount
             val zBuffer = DoubleArray(rayCount) { 20.0 }
@@ -3175,14 +3357,13 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
                 now < hitMarkerUntil -> crimsonGlow
                 else -> iceCyan
             }
-            val gap = dp(7).toFloat()
-            val arm = dp(14).toFloat()
+            val gap = if (isAdsEngaged()) dp(4).toFloat() else dp(7).toFloat()
+            val arm = if (isAdsEngaged()) dp(10).toFloat() else dp(14).toFloat()
             canvas.drawLine(cx - arm, cy, cx - gap, cy, hudPaint)
             canvas.drawLine(cx + gap, cy, cx + arm, cy, hudPaint)
             canvas.drawLine(cx, cy - arm, cx, cy - gap, hudPaint)
             canvas.drawLine(cx, cy + gap, cx, cy + arm, hudPaint)
 
-            // Radar directionnel vers le bot le plus proche
             val nearestBot = enemyBots.minByOrNull { hypot(it.x - playerX, it.y - playerY) }
             if (nearestBot != null) {
                 val relAngle = atan2(nearestBot.y - playerY, nearestBot.x - playerX) - playerAngle
@@ -3193,20 +3374,21 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
                 canvas.drawCircle(ix, iy, dp(3).toFloat(), botPaint)
             }
 
-            // Killfeed en haut à droite
             var feedY = dp(16).toFloat()
             for (line in killFeed.reversed()) {
                 canvas.drawText(line, w - dp(155), feedY, feedPaint)
                 feedY += dp(13).toFloat()
             }
 
-            val kickY = weaponRecoil * dp(18).toFloat()
-            val kickX = weaponRecoil * dp(8).toFloat()
+            val adsShiftX = if (isAdsEngaged()) -w * 0.14f else 0f
+            val adsShiftY = if (isAdsEngaged()) -h * 0.06f else 0f
+            val kickY = weaponRecoil * dp(18).toFloat() + adsShiftY
+            val kickX = weaponRecoil * dp(8).toFloat() + adsShiftX
             if (now < muzzleFlashUntil) {
                 canvas.drawCircle(w * 0.68f + kickX, h * 0.68f + kickY, dp(26).toFloat(), flashPaint)
             }
 
-            gunPaint.color = if (weaponOverheated) Color.parseColor("#5C1822") else Color.parseColor("#181B24")
+            gunPaint.color = if (weaponOverheated || isReloading) Color.parseColor("#5C1822") else Color.parseColor("#181B24")
             val barrel = Path().apply {
                 moveTo(w * 0.64f + kickX, h * 0.67f + kickY)
                 lineTo(w * 0.72f + kickX, h * 0.67f + kickY)
