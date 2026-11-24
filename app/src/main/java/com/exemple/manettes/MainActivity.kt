@@ -11,7 +11,12 @@ import android.content.res.ColorStateList
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.DashPathEffect
+import android.graphics.LinearGradient
 import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.RadialGradient
+import android.graphics.RectF
+import android.graphics.Shader
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.hardware.input.InputManager
@@ -28,11 +33,13 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.widget.Button
+import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.SeekBar
+import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 import kotlin.math.abs
@@ -47,18 +54,18 @@ import kotlin.random.Random
 
 class MainActivity : Activity(), InputManager.InputDeviceListener {
 
-    private val bgGlacier = Color.parseColor("#060A14")
-    private val glassCard = Color.argb(215, 16, 24, 42)
-    private val glassCardAlt = Color.argb(225, 23, 35, 60)
-    private val glassBorder = Color.argb(150, 95, 165, 255)
-    private val iceCyan = Color.parseColor("#38E8FF")
-    private val iceBlue = Color.parseColor("#4D8BFF")
-    private val iceCoral = Color.parseColor("#FF4D6D")
-    private val iceGold = Color.parseColor("#FFC857")
-    private val iceMint = Color.parseColor("#4DFFBE")
-    private val iceViolet = Color.parseColor("#A77BFF")
-    private val textFrost = Color.parseColor("#F4F8FF")
-    private val textMist = Color.parseColor("#98ACC9")
+    private val bgObsidian = Color.parseColor("#050406")
+    private val smokeRed = Color.parseColor("#3A0810")
+    private val glassFill = Color.argb(195, 22, 16, 20)
+    private val glassFillLight = Color.argb(215, 34, 22, 28)
+    private val glassEdge = Color.argb(145, 255, 195, 205)
+    private val crimsonGlow = Color.parseColor("#FF2A3C")
+    private val emberRed = Color.parseColor("#D91628")
+    private val mintOnline = Color.parseColor("#35F27E")
+    private val iceCyan = Color.parseColor("#4CE8FF")
+    private val iceGold = Color.parseColor("#FFC95C")
+    private val textPure = Color.parseColor("#FFFFFF")
+    private val textSub = Color.parseColor("#B8A8AE")
 
     private lateinit var prefs: SharedPreferences
     private lateinit var inputManager: InputManager
@@ -92,14 +99,23 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
 
     private val fpsTargets = mutableListOf<FpsTarget>()
 
-    private var currentTab = 0
-    private val tabButtons = mutableListOf<TextView>()
-    private val tabPanels = mutableListOf<View>()
+    private var currentNavIndex = 0
+    private val navItems = mutableListOf<LinearLayout>()
+    private val navIcons = mutableListOf<TextView>()
+    private val navLabels = mutableListOf<TextView>()
+    private val navIndicators = mutableListOf<View>()
+    private val pageViews = mutableListOf<View>()
 
-    private lateinit var mainUiContainer: LinearLayout
+    private lateinit var mainUiContainer: FrameLayout
     private lateinit var fpsContainer: LinearLayout
     private lateinit var fpsArenaView: FpsArenaView
     private lateinit var fpsHudText: TextView
+
+    private lateinit var heroStatusDot: View
+    private lateinit var heroStatusTitle: TextView
+    private lateinit var heroModelLabel: TextView
+    private lateinit var heroBatteryLabel: TextView
+    private lateinit var heroPadPreview: ControllerHeroView
 
     private lateinit var devicesText: TextView
     private lateinit var liveText: TextView
@@ -143,10 +159,11 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
     private var dzL = 10
     private var dzR = 10
 
-    private var vibAmplitude = 200
+    private var vibrationEnabled = true
+    private var vibAmplitude = 210
     private var vibDurationMs = 300
-    private var selectedLedColor = iceCyan
-    private var selectedLedName = "CYAN GLACIER"
+    private var selectedLedColor = crimsonGlow
+    private var selectedLedName = "ROUGE DUSTØ"
 
     private val pressed = linkedSetOf<String>()
     private val eventLog = ArrayDeque<String>(25)
@@ -174,29 +191,29 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
-    private fun glassSurface(accentBorder: Int = glassBorder, fill: Int = glassCard): GradientDrawable {
+    private fun glassCardDrawable(radiusDp: Int = 22, borderColor: Int = glassEdge, fillColor: Int = glassFill): GradientDrawable {
         return GradientDrawable().apply {
-            setColor(fill)
-            cornerRadius = dp(16).toFloat()
-            setStroke(dp(1), accentBorder)
+            setColor(fillColor)
+            cornerRadius = dp(radiusDp).toFloat()
+            setStroke(dp(1), borderColor)
         }
     }
 
-    private fun glassButtonBg(strokeColor: Int, fillColor: Int = glassCardAlt): GradientDrawable {
+    private fun actionButtonDrawable(strokeColor: Int = crimsonGlow, fillColor: Int = glassFillLight): GradientDrawable {
         return GradientDrawable().apply {
             setColor(fillColor)
-            cornerRadius = dp(12).toFloat()
+            cornerRadius = dp(14).toFloat()
             setStroke(dp(1), strokeColor)
         }
     }
 
-    private fun styleGlassButton(btn: Button, label: String, strokeColor: Int, onClick: () -> Unit) {
-        btn.text = label
-        btn.setTextColor(textFrost)
+    private fun styleActionButton(btn: Button, text: String, strokeColor: Int = crimsonGlow, onClick: () -> Unit) {
+        btn.text = text
+        btn.setTextColor(textPure)
         btn.textSize = 12f
         btn.typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
         btn.isAllCaps = false
-        btn.background = glassButtonBg(strokeColor)
+        btn.background = actionButtonDrawable(strokeColor)
         btn.setPadding(dp(14), dp(12), dp(14), dp(12))
         val lp = LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
@@ -222,157 +239,645 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
 
         dzL = prefs.getInt("dzL", 10)
         dzR = prefs.getInt("dzR", 10)
-        vibAmplitude = prefs.getInt("vibAmp", 200).coerceIn(1, 255)
+        vibrationEnabled = prefs.getBoolean("vibEnabled", true)
+        vibAmplitude = prefs.getInt("vibAmp", 210).coerceIn(1, 255)
         vibDurationMs = prefs.getInt("vibDur", 300).coerceIn(50, 1500)
         loadActiveProfileOffsets()
 
-        val outerRoot = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(bgGlacier)
-            setPadding(dp(14), dp(28), dp(14), dp(16))
+        val root = FrameLayout(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+            addView(SmokeBackdropView(this@MainActivity))
         }
 
-        mainUiContainer = LinearLayout(this).apply {
+        mainUiContainer = FrameLayout(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+            setPadding(dp(16), dp(24), dp(16), dp(14))
+        }
+
+        val shell = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.MATCH_PARENT
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
             )
         }
 
-        val headerCard = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = glassSurface(iceCyan, glassCard)
-            setPadding(dp(16), dp(14), dp(16), dp(14))
-        }
+        shell.addView(buildTopBrandBar())
 
-        val kicker = TextView(this).apply {
-            text = "GLASS STUDIO // PAD & BT BRIDGE"
-            setTextColor(iceCyan)
-            textSize = 11f
-            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-            letterSpacing = 0.08f
-        }
-        headerCard.addView(kicker)
-
-        val title = TextView(this).apply {
-            text = "Manettes"
-            setTextColor(textFrost)
-            textSize = 24f
-            typeface = Typeface.create("sans-serif-light", Typeface.BOLD)
-            setPadding(0, dp(2), 0, 0)
-        }
-        headerCard.addView(title)
-
-        mainUiContainer.addView(headerCard)
-
-        val tabBar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, dp(10), 0, dp(10))
-        }
-
-        val tabNames = listOf("Manettes", "Joysticks", "Entrées", "Calibration", "Pont BT", "Fun & Lab", "Jeu FPS")
-
-        tabNames.forEachIndexed { idx, name ->
-            val tv = TextView(this).apply {
-                text = name
-                textSize = 12f
-                typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-                gravity = Gravity.CENTER
-                setPadding(dp(12), dp(9), dp(12), dp(9))
-                val lp = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply {
-                    if (idx > 0) marginStart = dp(6)
-                }
-                layoutParams = lp
-                setOnClickListener {
-                    if (idx == tabNames.lastIndex) {
-                        enterFpsMode()
-                    } else {
-                        selectTab(idx)
-                    }
-                }
-            }
-            tabButtons.add(tv)
-            tabBar.addView(tv)
-        }
-
-        val tabScroller = HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-            addView(tabBar)
-        }
-        mainUiContainer.addView(tabScroller)
-
-        val contentContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
+        val pageHost = FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT,
                 0,
                 1f
-            )
+            ).apply {
+                topMargin = dp(10)
+                bottomMargin = dp(10)
+            }
         }
 
-        tabPanels.addAll(
+        pageViews.addAll(
             listOf(
-                buildDevicesPanel(),
-                buildJoysticksPanel(),
-                buildInputsPanel(),
-                buildCalibrationPanel(),
-                buildBtBridgePanel(),
-                buildFunPanel()
+                buildHomePage(),
+                buildStatsPage(),
+                buildGamesPage(),
+                buildAboutPage()
             )
         )
-        for (p in tabPanels) {
-            contentContainer.addView(p)
+        for (p in pageViews) {
+            pageHost.addView(p)
         }
+        shell.addView(pageHost)
+        shell.addView(buildBottomGlassNav())
 
-        mainUiContainer.addView(contentContainer)
+        mainUiContainer.addView(shell)
+
         fpsContainer = buildFpsModeView().apply {
             visibility = View.GONE
+            setPadding(dp(16), dp(24), dp(16), dp(14))
         }
 
-        outerRoot.addView(mainUiContainer)
-        outerRoot.addView(fpsContainer)
-        setContentView(outerRoot)
+        root.addView(mainUiContainer)
+        root.addView(fpsContainer)
+        setContentView(root)
 
-        selectTab(0)
+        selectNav(0)
         refreshDevices()
+        refreshBtStatus()
         refresh()
     }
 
-    private fun buildBtBridgePanel(): View {
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = glassSurface(iceBlue, glassCard)
-            setPadding(dp(16), dp(16), dp(16), dp(16))
+    private fun buildTopBrandBar(): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(2), dp(2), dp(2), dp(2))
         }
 
-        val heading = TextView(this).apply {
-            text = "Relais Bluetooth Manette -> Console"
+        val padBadge = TextView(this).apply {
+            text = "🎮"
+            textSize = 26f
+            setTextColor(crimsonGlow)
+            setPadding(0, 0, dp(10), 0)
+        }
+        row.addView(padBadge)
+
+        val titleCol = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+
+        val brandTitle = TextView(this).apply {
+            text = "DUSTØ"
+            setTextColor(textPure)
+            textSize = 22f
+            typeface = Typeface.create("sans-serif-black", Typeface.BOLD_ITALIC)
+            letterSpacing = 0.06f
+        }
+        titleCol.addView(brandTitle)
+
+        val subTitle = TextView(this).apply {
+            text = "Controller Hub"
+            setTextColor(textSub)
+            textSize = 13f
+            typeface = Typeface.create("sans-serif", Typeface.NORMAL)
+        }
+        titleCol.addView(subTitle)
+
+        row.addView(titleCol)
+
+        val gearBtn = TextView(this).apply {
+            text = "⚙"
+            textSize = 20f
+            setTextColor(textPure)
+            gravity = Gravity.CENTER
+            background = glassCardDrawable(16, glassEdge, glassFillLight)
+            layoutParams = LinearLayout.LayoutParams(dp(44), dp(44))
+            setOnClickListener {
+                selectNav(1)
+                Toast.makeText(this@MainActivity, "Réglages & Calibration", Toast.LENGTH_SHORT).show()
+            }
+        }
+        row.addView(gearBtn)
+
+        return row
+    }
+
+    private fun buildHomePage(): View {
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        }
+
+        val heroCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = glassCardDrawable(24, glassEdge, glassFill)
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+        }
+
+        val heroTop = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+
+        heroStatusDot = View(this).apply {
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(mintOnline)
+            }
+            layoutParams = LinearLayout.LayoutParams(dp(14), dp(14)).apply {
+                marginEnd = dp(10)
+            }
+        }
+        heroTop.addView(heroStatusDot)
+
+        val heroInfoCol = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+
+        heroStatusTitle = TextView(this).apply {
+            text = "Manette connectée"
+            setTextColor(textPure)
+            textSize = 15f
+            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+        }
+        heroInfoCol.addView(heroStatusTitle)
+
+        heroModelLabel = TextView(this).apply {
+            text = "En attente de manette"
+            setTextColor(textSub)
+            textSize = 12f
+        }
+        heroInfoCol.addView(heroModelLabel)
+        heroTop.addView(heroInfoCol)
+
+        heroBatteryLabel = TextView(this).apply {
+            text = "🔋 -- %"
+            setTextColor(textPure)
+            textSize = 13f
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        }
+        heroTop.addView(heroBatteryLabel)
+        heroCard.addView(heroTop)
+
+        heroPadPreview = ControllerHeroView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(156)
+            ).apply {
+                topMargin = dp(8)
+            }
+            setOnClickListener { enterFpsMode() }
+        }
+        heroCard.addView(heroPadPreview)
+        col.addView(heroCard)
+
+        val customBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = glassCardDrawable(18, glassEdge, glassFill)
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(10)
+            }
+            setOnClickListener { selectNav(1) }
+        }
+
+        val sliderGlyph = TextView(this).apply {
+            text = "🎛"
+            textSize = 18f
+            setTextColor(textPure)
+            setPadding(0, 0, dp(12), 0)
+        }
+        customBar.addView(sliderGlyph)
+
+        val customText = TextView(this).apply {
+            text = "Personnaliser ma manette"
+            setTextColor(textPure)
+            textSize = 14f
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        customBar.addView(customText)
+
+        val chevMain = TextView(this).apply {
+            text = "›"
+            setTextColor(textPure)
+            textSize = 22f
+        }
+        customBar.addView(chevMain)
+        col.addView(customBar)
+
+        val gridRow1 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(10)
+            }
+        }
+
+        val tileSettings = makeGlassTile("⌖", "Réglages", "Sensibilité, deadzone...", true) {
+            selectNav(1)
+        }.apply {
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginEnd = dp(5)
+            }
+        }
+
+        val tileProfiles = makeGlassTile("🎮", "Profils", "Créer ou changer de profil", true) {
+            loadActiveProfileOffsets()
+            refreshDevices()
+            refreshBtStatus()
+            refresh()
+            Toast.makeText(this, "Profil synchronisé : ${activeProfileKey().take(24)}", Toast.LENGTH_SHORT).show()
+        }.apply {
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginStart = dp(5)
+            }
+        }
+        gridRow1.addView(tileSettings)
+        gridRow1.addView(tileProfiles)
+        col.addView(gridRow1)
+
+        val gridRow2 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(10)
+            }
+        }
+
+        val vibSwitch = Switch(this).apply {
+            isChecked = vibrationEnabled
+            if (Build.VERSION.SDK_INT >= 23) {
+                thumbTintList = ColorStateList.valueOf(textPure)
+                trackTintList = ColorStateList.valueOf(if (vibrationEnabled) crimsonGlow else textSub)
+            }
+            setOnCheckedChangeListener { _, checked ->
+                vibrationEnabled = checked
+                prefs.edit().putBoolean("vibEnabled", checked).apply()
+                if (Build.VERSION.SDK_INT >= 23) {
+                    trackTintList = ColorStateList.valueOf(if (checked) crimsonGlow else textSub)
+                }
+                if (checked) vibrer()
+            }
+        }
+
+        val tileVib = makeGlassTile("〰", "Vibration", "Activer / désactiver", false) {
+            vibSwitch.toggle()
+        }.apply {
+            addView(vibSwitch)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginEnd = dp(5)
+            }
+        }
+
+        val tileLight = makeGlassTile("💡", "Éclairage", "Personnaliser les LED", true) {
+            cycleLedPreset()
+        }.apply {
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginStart = dp(5)
+            }
+        }
+
+        gridRow2.addView(tileVib)
+        gridRow2.addView(tileLight)
+        col.addView(gridRow2)
+
+        return col
+    }
+
+    private fun makeGlassTile(
+        iconChar: String,
+        title: String,
+        subtitle: String,
+        showChevron: Boolean,
+        onClick: () -> Unit
+    ): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = glassCardDrawable(20, glassEdge, glassFill)
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            setOnClickListener { onClick() }
+
+            val topRow = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+
+            val iconTv = TextView(context).apply {
+                text = iconChar
+                textSize = 20f
+                setTextColor(crimsonGlow)
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            topRow.addView(iconTv)
+
+            if (showChevron) {
+                val chev = TextView(context).apply {
+                    text = "›"
+                    textSize = 20f
+                    setTextColor(textPure)
+                }
+                topRow.addView(chev)
+            }
+            addView(topRow)
+
+            val titleTv = TextView(context).apply {
+                text = title
+                setTextColor(textPure)
+                textSize = 14f
+                typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+                setPadding(0, dp(6), 0, dp(2))
+            }
+            addView(titleTv)
+
+            val subTv = TextView(context).apply {
+                text = subtitle
+                setTextColor(textSub)
+                textSize = 11f
+            }
+            addView(subTv)
+        }
+    }
+
+    private fun cycleLedPreset() {
+        val presets = listOf(
+            Triple("ROUGE DUSTØ", crimsonGlow, crimsonGlow),
+            Triple("BLEU PS", Color.parseColor("#2962FF"), Color.parseColor("#2962FF")),
+            Triple("CYAN GLACIER", iceCyan, iceCyan),
+            Triple("MENTHE", mintOnline, mintOnline),
+            Triple("OR", iceGold, iceGold)
+        )
+        val idx = presets.indexOfFirst { it.first == selectedLedName }
+        val next = presets[(idx + 1) % presets.size]
+        applyControllerLight(next.first, next.second)
+        Toast.makeText(this, "Éclairage : ${next.first}", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun buildStatsPage(): View {
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+
+        val radarCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = glassCardDrawable(22, glassEdge, glassFill)
+            setPadding(dp(14), dp(14), dp(14), dp(14))
+        }
+
+        val radarTitle = TextView(this).apply {
+            text = "Radar Précision, Circularité & Snapback"
+            setTextColor(crimsonGlow)
+            textSize = 14f
+            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+        }
+        radarCard.addView(radarTitle)
+
+        radarView = JoystickRadarView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(215)
+            ).apply {
+                topMargin = dp(6)
+            }
+        }
+        radarCard.addView(radarView)
+
+        val resetRadarBtn = Button(this)
+        styleActionButton(resetRadarBtn, "Réinitialiser Circularité & Snapback", iceCyan) {
+            resetCircleMetrics()
+        }
+        radarCard.addView(resetRadarBtn)
+        col.addView(radarCard)
+
+        val calibCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = glassCardDrawable(22, glassEdge, glassFill)
+            setPadding(dp(14), dp(14), dp(14), dp(14))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(10)
+            }
+        }
+
+        calibStatusText = TextView(this).apply {
+            setTextColor(textSub)
+            textSize = 11f
+            typeface = Typeface.MONOSPACE
+        }
+        calibCard.addView(calibStatusText)
+
+        labelL = TextView(this).apply {
+            text = "Zone morte gauche : $dzL %"
+            setTextColor(textPure)
+            textSize = 12f
+            setPadding(0, dp(8), 0, dp(2))
+        }
+        calibCard.addView(labelL)
+
+        seekL = makeSeek(dzL, iceCyan) {
+            dzL = it
+            prefs.edit().putInt("dzL", it).apply()
+            labelL.text = "Zone morte gauche : $it %"
+            refresh()
+        }
+        calibCard.addView(seekL)
+
+        labelR = TextView(this).apply {
+            text = "Zone morte droite : $dzR %"
+            setTextColor(textPure)
+            textSize = 12f
+            setPadding(0, dp(8), 0, dp(2))
+        }
+        calibCard.addView(labelR)
+
+        seekR = makeSeek(dzR, crimsonGlow) {
+            dzR = it
+            prefs.edit().putInt("dzR", it).apply()
+            labelR.text = "Zone morte droite : $it %"
+            refresh()
+        }
+        calibCard.addView(seekR)
+
+        val calBtn = Button(this)
+        styleActionButton(calBtn, "Calibrer le Profil Actuel", mintOnline) {
+            calibrer()
+        }
+        calibCard.addView(calBtn)
+
+        val rstBtn = Button(this)
+        styleActionButton(rstBtn, "Réinitialiser les Réglages", iceGold) {
+            reinitialiser()
+        }
+        calibCard.addView(rstBtn)
+        col.addView(calibCard)
+
+        val inputsCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = glassCardDrawable(22, glassEdge, glassFill)
+            setPadding(dp(14), dp(14), dp(14), dp(14))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(10)
+            }
+        }
+
+        val lblTrigL = TextView(this).apply {
+            text = "Gâchette L (0–100%)"
+            setTextColor(iceCyan)
+            textSize = 12f
+        }
+        inputsCard.addView(lblTrigL)
+
+        barTrigL = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 100
+            if (Build.VERSION.SDK_INT >= 21) {
+                progressTintList = ColorStateList.valueOf(iceCyan)
+            }
+        }
+        inputsCard.addView(barTrigL)
+
+        val lblTrigR = TextView(this).apply {
+            text = "Gâchette R (0–100%)"
+            setTextColor(crimsonGlow)
+            textSize = 12f
+            setPadding(0, dp(6), 0, 0)
+        }
+        inputsCard.addView(lblTrigR)
+
+        barTrigR = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 100
+            if (Build.VERSION.SDK_INT >= 21) {
+                progressTintList = ColorStateList.valueOf(crimsonGlow)
+            }
+        }
+        inputsCard.addView(barTrigR)
+
+        trigDiagText = TextView(this).apply {
+            setTextColor(iceGold)
+            textSize = 11f
+            typeface = Typeface.MONOSPACE
+            setPadding(0, dp(6), 0, dp(6))
+        }
+        inputsCard.addView(trigDiagText)
+
+        driftSummaryText = TextView(this).apply {
+            setTextColor(textPure)
+            textSize = 11f
+            typeface = Typeface.MONOSPACE
+        }
+        inputsCard.addView(driftSummaryText)
+
+        liveText = TextView(this).apply {
+            setTextColor(textPure)
+            textSize = 11f
+            typeface = Typeface.MONOSPACE
+            setPadding(0, dp(8), 0, 0)
+        }
+        inputsCard.addView(liveText)
+
+        eventLogText = TextView(this).apply {
+            setTextColor(textSub)
+            textSize = 11f
+            typeface = Typeface.MONOSPACE
+            setPadding(0, dp(8), 0, 0)
+        }
+        inputsCard.addView(eventLogText)
+
+        col.addView(inputsCard)
+
+        return ScrollView(this).apply {
+            isVerticalScrollBarEnabled = false
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+            addView(col)
+        }
+    }
+
+    private fun buildGamesPage(): View {
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+
+        val fpsCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = glassCardDrawable(22, glassEdge, glassFill)
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+        }
+
+        val fpsTitle = TextView(this).apply {
+            text = "Arène de Tir FPS"
+            setTextColor(crimsonGlow)
+            textSize = 15f
+            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+        }
+        fpsCard.addView(fpsTitle)
+
+        val fpsDesc = TextView(this).apply {
+            text = "Teste tes joysticks et gâchettes en direct : Stick G pour bouger, Stick D pour viser, Gâchette R / A pour tirer."
+            setTextColor(textSub)
+            textSize = 12f
+            setPadding(0, dp(4), 0, dp(6))
+        }
+        fpsCard.addView(fpsDesc)
+
+        val launchFpsBtn = Button(this)
+        styleActionButton(launchFpsBtn, "Lancer le Jeu FPS", crimsonGlow) {
+            enterFpsMode()
+        }
+        fpsCard.addView(launchFpsBtn)
+        col.addView(fpsCard)
+
+        val btCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = glassCardDrawable(22, glassEdge, glassFill)
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(10)
+            }
+        }
+
+        val btTitle = TextView(this).apply {
+            text = "Pont Bluetooth Manette -> Console"
             setTextColor(iceCyan)
             textSize = 15f
             typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
         }
-        box.addView(heading)
-
-        val desc = TextView(this).apply {
-            text = "Utilise ton téléphone comme pont entre ta manette (ex. Switch) et une cible (PlayStation, Xbox, Switch ou PC)."
-            setTextColor(textMist)
-            textSize = 12f
-            setPadding(0, dp(6), 0, dp(10))
-        }
-        box.addView(desc)
+        btCard.addView(btTitle)
 
         btModeLabel = TextView(this).apply {
             text = "Profil cible : $targetConsoleMode"
-            setTextColor(textFrost)
-            textSize = 13f
-            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-            setPadding(0, 0, 0, dp(8))
+            setTextColor(textPure)
+            textSize = 12f
+            setPadding(0, dp(6), 0, dp(6))
         }
-        box.addView(btModeLabel)
+        btCard.addView(btModeLabel)
 
         val consoleRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -383,8 +888,8 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
                 text = target
                 textSize = 10f
                 isAllCaps = false
-                setTextColor(textFrost)
-                background = glassButtonBg(iceBlue, glassCardAlt)
+                setTextColor(textPure)
+                background = actionButtonDrawable(if (targetConsoleMode == target) crimsonGlow else glassEdge)
                 setPadding(dp(6), dp(8), dp(6), dp(8))
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
                     marginEnd = dp(4)
@@ -397,121 +902,327 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
             }
             consoleRow.addView(b)
         }
-        box.addView(consoleRow)
+        btCard.addView(consoleRow)
 
         btStatusText = TextView(this).apply {
-            setTextColor(textFrost)
-            textSize = 12f
+            setTextColor(textPure)
+            textSize = 11f
             typeface = Typeface.MONOSPACE
-            setPadding(0, dp(6), 0, dp(8))
+            setPadding(0, dp(4), 0, dp(6))
         }
-        box.addView(btStatusText)
+        btCard.addView(btStatusText)
 
-        val toggleBtn = Button(this)
-        styleGlassButton(toggleBtn, "Activer / Couper le relais Bluetooth", iceCyan) {
+        val btBtn = Button(this)
+        styleActionButton(btBtn, "Activer / Couper le Relais Bluetooth", iceCyan) {
             toggleBtBridge()
         }
-        box.addView(toggleBtn)
+        btCard.addView(btBtn)
+        col.addView(btCard)
 
-        val note = TextView(this).apply {
-            text = "Note technique : Android gère le profil Bluetooth HID Device uniquement sur certains appareils/firmwares, et les consoles PS/Xbox exigent souvent une authentification matérielle dédiée."
-            setTextColor(textMist)
+        val funCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = glassCardDrawable(22, glassEdge, glassFill)
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(10)
+            }
+        }
+
+        funStatsText = TextView(this).apply {
+            setTextColor(textPure)
+            textSize = 12f
+            typeface = Typeface.MONOSPACE
+        }
+        funCard.addView(funStatsText)
+
+        ledPreviewView = View(this).apply {
+            background = GradientDrawable().apply {
+                setColor(selectedLedColor)
+                cornerRadius = dp(10).toFloat()
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(26)
+            ).apply {
+                topMargin = dp(10)
+                bottomMargin = dp(6)
+            }
+        }
+        funCard.addView(ledPreviewView)
+
+        ledStatusText = TextView(this).apply {
+            text = "Couleur : $selectedLedName"
+            setTextColor(textSub)
             textSize = 11f
-            setPadding(0, dp(10), 0, 0)
+            typeface = Typeface.MONOSPACE
         }
-        box.addView(note)
+        funCard.addView(ledStatusText)
 
+        val chipScroll = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            setPadding(0, dp(8), 0, dp(4))
+        }
+        val chipRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+        for ((name, colHex) in listOf(
+            "ROUGE DUSTØ" to crimsonGlow,
+            "BLEU PS" to Color.parseColor("#2962FF"),
+            "CYAN GLACIER" to iceCyan,
+            "MENTHE" to mintOnline,
+            "OR" to iceGold
+        )) {
+            val chip = Button(this).apply {
+                text = name
+                textSize = 10f
+                isAllCaps = false
+                setTextColor(textPure)
+                background = actionButtonDrawable(colHex)
+                setPadding(dp(10), dp(8), dp(10), dp(8))
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    marginEnd = dp(6)
+                }
+                setOnClickListener { applyControllerLight(name, colHex) }
+            }
+            chipRow.addView(chip)
+        }
+        chipScroll.addView(chipRow)
+        funCard.addView(chipScroll)
+
+        val panicBtn = Button(this)
+        styleActionButton(panicBtn, "Bouton Panique / Rage Quit", crimsonGlow) {
+            triggerRageQuit()
+        }
+        funCard.addView(panicBtn)
+
+        val resetFunBtn = Button(this)
+        styleActionButton(resetFunBtn, "Reset Mash & Drift-o-mètre", iceCyan) {
+            peakCps = 0.0
+            driftEvents = 0
+            snapbackCount = 0
+            maxTrigL = 0f
+            maxTrigR = 0f
+            pressTimestamps.clear()
+            refresh()
+            Toast.makeText(this, "Compteurs réinitialisés", Toast.LENGTH_SHORT).show()
+        }
+        funCard.addView(resetFunBtn)
+        col.addView(funCard)
+
+        return ScrollView(this).apply {
+            isVerticalScrollBarEnabled = false
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+            addView(col)
+        }
+    }
+
+    private fun buildAboutPage(): View {
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+
+        val devCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = glassCardDrawable(22, glassEdge, glassFill)
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+        }
+
+        val devTitle = TextView(this).apply {
+            text = "Matériel & Vibration"
+            setTextColor(crimsonGlow)
+            textSize = 15f
+            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+        }
+        devCard.addView(devTitle)
+
+        devicesText = TextView(this).apply {
+            setTextColor(textPure)
+            textSize = 12f
+            typeface = Typeface.MONOSPACE
+            setPadding(0, dp(8), 0, dp(10))
+        }
+        devCard.addView(devicesText)
+
+        vibAmpLabel = TextView(this).apply {
+            text = "Intensité vibration : ${(vibAmplitude * 100) / 255}%"
+            setTextColor(textPure)
+            textSize = 12f
+        }
+        devCard.addView(vibAmpLabel)
+
+        seekVibAmp = SeekBar(this).apply {
+            max = 255
+            progress = vibAmplitude
+            if (Build.VERSION.SDK_INT >= 21) {
+                progressTintList = ColorStateList.valueOf(crimsonGlow)
+                thumbTintList = ColorStateList.valueOf(textPure)
+            }
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) {
+                    val v = p.coerceAtLeast(1)
+                    vibAmplitude = v
+                    prefs.edit().putInt("vibAmp", v).apply()
+                    vibAmpLabel.text = "Intensité vibration : ${(v * 100) / 255}%"
+                }
+                override fun onStartTrackingTouch(s: SeekBar?) {}
+                override fun onStopTrackingTouch(s: SeekBar?) {}
+            })
+        }
+        devCard.addView(seekVibAmp)
+
+        vibDurLabel = TextView(this).apply {
+            text = "Durée vibration : ${vibDurationMs} ms"
+            setTextColor(textPure)
+            textSize = 12f
+            setPadding(0, dp(8), 0, 0)
+        }
+        devCard.addView(vibDurLabel)
+
+        seekVibDur = SeekBar(this).apply {
+            max = 1450
+            progress = (vibDurationMs - 50).coerceIn(0, 1450)
+            if (Build.VERSION.SDK_INT >= 21) {
+                progressTintList = ColorStateList.valueOf(iceCyan)
+                thumbTintList = ColorStateList.valueOf(textPure)
+            }
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) {
+                    val ms = p + 50
+                    vibDurationMs = ms
+                    prefs.edit().putInt("vibDur", ms).apply()
+                    vibDurLabel.text = "Durée vibration : ${ms} ms"
+                }
+                override fun onStartTrackingTouch(s: SeekBar?) {}
+                override fun onStopTrackingTouch(s: SeekBar?) {}
+            })
+        }
+        devCard.addView(seekVibDur)
+
+        val scanBtn = Button(this)
+        styleActionButton(scanBtn, "Actualiser Manettes", iceCyan) {
+            refreshDevices()
+            refreshBtStatus()
+            refresh()
+        }
+        devCard.addView(scanBtn)
+
+        val vibTestBtn = Button(this)
+        styleActionButton(vibTestBtn, "Tester la Vibration", crimsonGlow) {
+            vibrer()
+        }
+        devCard.addView(vibTestBtn)
+
+        col.addView(devCard)
+        return ScrollView(this).apply {
+            isVerticalScrollBarEnabled = false
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+            addView(col)
+        }
+    }
+
+    private fun buildBottomGlassNav(): View {
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            background = glassCardDrawable(24, glassEdge, glassFill)
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+        }
+
+        val tabs = listOf(
+            "🏠" to "Accueil",
+            "📊" to "Stats",
+            "⊞" to "Jeux",
+            "ⓘ" to "À propos"
+        )
+
+        tabs.forEachIndexed { idx, (icon, label) ->
+            val item = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                setPadding(dp(4), dp(4), dp(4), dp(2))
+                setOnClickListener { selectNav(idx) }
+            }
+
+            val iconTv = TextView(this).apply {
+                text = icon
+                textSize = 18f
+                gravity = Gravity.CENTER
+            }
+            item.addView(iconTv)
+            navIcons.add(iconTv)
+
+            val labelTv = TextView(this).apply {
+                text = label
+                textSize = 11f
+                gravity = Gravity.CENTER
+                typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+                setPadding(0, dp(2), 0, dp(3))
+            }
+            item.addView(labelTv)
+            navLabels.add(labelTv)
+
+            val barInd = View(this).apply {
+                layoutParams = LinearLayout.LayoutParams(dp(26), dp(3))
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(2).toFloat()
+                    setColor(crimsonGlow)
+                }
+            }
+            item.addView(barInd)
+            navIndicators.add(barInd)
+
+            navItems.add(item)
+            bar.addView(item)
+        }
+
+        return bar
+    }
+
+    private fun selectNav(index: Int) {
+        currentNavIndex = index
+        pageViews.forEachIndexed { i, view ->
+            view.visibility = if (i == index) View.VISIBLE else View.GONE
+        }
+        navLabels.forEachIndexed { i, tv ->
+            val active = i == index
+            tv.setTextColor(if (active) crimsonGlow else textSub)
+            navIcons[i].setTextColor(if (active) crimsonGlow else textSub)
+            navIndicators[i].visibility = if (active) View.VISIBLE else View.INVISIBLE
+        }
         refreshBtStatus()
-        return wrapScroll(box)
-    }
-
-    private fun toggleBtBridge() {
-        val adapter = btAdapter
-        if (adapter == null || !adapter.isEnabled) {
-            Toast.makeText(this, "Active le Bluetooth du téléphone d'abord", Toast.LENGTH_SHORT).show()
-            return
-        }
-        if (btBridgeEnabled) {
-            btBridgeEnabled = false
-            closeHidProxy()
-            refreshBtStatus()
-            Toast.makeText(this, "Relais Bluetooth arrêté", Toast.LENGTH_SHORT).show()
-            return
-        }
-        if (Build.VERSION.SDK_INT >= 28) {
-            try {
-                adapter.getProfileProxy(this, object : BluetoothProfile.ServiceListener {
-                    override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
-                        if (profile == BluetoothProfile.HID_DEVICE) {
-                            hidDevice = proxy as? BluetoothHidDevice
-                            btBridgeEnabled = true
-                            refreshBtStatus()
-                        }
-                    }
-
-                    override fun onServiceDisconnected(profile: Int) {
-                        if (profile == BluetoothProfile.HID_DEVICE) {
-                            hidDevice = null
-                            btBridgeEnabled = false
-                            refreshBtStatus()
-                        }
-                    }
-                }, BluetoothProfile.HID_DEVICE)
-                btBridgeEnabled = true
-                refreshBtStatus()
-                Toast.makeText(this, "Relais Bluetooth prêt ($targetConsoleMode)", Toast.LENGTH_SHORT).show()
-            } catch (_: SecurityException) {
-                Toast.makeText(this, "Permission Bluetooth requise dans les réglages", Toast.LENGTH_SHORT).show()
-            }
-        } else {
-            btBridgeEnabled = true
-            refreshBtStatus()
-            Toast.makeText(this, "Mode relais activé (Android < 9 limité)", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    private fun closeHidProxy() {
-        val adapter = btAdapter
-        val proxy = hidDevice
-        if (adapter != null && proxy != null && Build.VERSION.SDK_INT >= 28) {
-            try {
-                adapter.closeProfileProxy(BluetoothProfile.HID_DEVICE, proxy)
-            } catch (_: Exception) {
-            }
-        }
-        hidDevice = null
-    }
-
-    private fun refreshBtStatus() {
-        if (!::btStatusText.isInitialized) return
-        val btOn = btAdapter?.isEnabled == true
-        val hidReady = hidDevice != null
-        val padName = gamepads().firstOrNull()?.name ?: "Aucune manette locale"
-        btStatusText.text =
-            "Bluetooth téléphone : ${if (btOn) "ACTIF" else "INACTIF"}\n" +
-                "Manette source : $padName\n" +
-                "Cible : $targetConsoleMode | Relais : ${if (btBridgeEnabled) "ACTIF" else "INACTIF"}\n" +
-                "Profil HID Device : ${if (hidReady) "CONNECTÉ" else "EN ATTENTE / NON SUPPORTÉ"}"
+        refresh()
     }
 
     private fun buildFpsModeView(): LinearLayout {
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.MATCH_PARENT
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
             )
         }
 
         val topBar = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            background = glassSurface(iceCoral, glassCard)
+            background = glassCardDrawable(20, glassEdge, glassFill)
             setPadding(dp(14), dp(10), dp(14), dp(10))
         }
 
         fpsHudText = TextView(this).apply {
             text = "SCORE 0 | TIRS 0 | TOUCHÉS 0 | PRÉCISION 0%"
-            setTextColor(iceCyan)
+            setTextColor(crimsonGlow)
             textSize = 12f
             typeface = Typeface.MONOSPACE
         }
@@ -519,7 +1230,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
 
         val helpText = TextView(this).apply {
             text = "Stick G : bouger | Stick D : viser | Gâchette R / A : tirer"
-            setTextColor(textMist)
+            setTextColor(textSub)
             textSize = 11f
             setPadding(0, dp(2), 0, 0)
         }
@@ -547,9 +1258,9 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         val fireBtn = Button(this).apply {
             text = "Tirer"
             textSize = 12f
-            setTextColor(textFrost)
+            setTextColor(textPure)
             isAllCaps = false
-            background = glassButtonBg(iceCoral, glassCardAlt)
+            background = actionButtonDrawable(crimsonGlow)
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
                 marginEnd = dp(6)
             }
@@ -560,9 +1271,9 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         val exitBtn = Button(this).apply {
             text = "Quitter"
             textSize = 12f
-            setTextColor(textFrost)
+            setTextColor(textPure)
             isAllCaps = false
-            background = glassButtonBg(iceCyan, glassCardAlt)
+            background = actionButtonDrawable(iceCyan)
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
                 marginStart = dp(6)
             }
@@ -595,7 +1306,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         gameHandler.removeCallbacks(fpsLoop)
         fpsContainer.visibility = View.GONE
         mainUiContainer.visibility = View.VISIBLE
-        selectTab(1)
+        selectNav(0)
         logEvent("Sortie jeu FPS")
     }
 
@@ -699,15 +1410,72 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         fpsHudText.text = "SCORE $fpsScore | TIRS $fpsShots | TOUCHÉS $fpsHits | PRÉCISION $acc%"
     }
 
-    private fun wrapScroll(child: View): ScrollView {
-        return ScrollView(this).apply {
-            isVerticalScrollBarEnabled = false
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.MATCH_PARENT
-            )
-            addView(child)
+    private fun toggleBtBridge() {
+        val adapter = btAdapter
+        if (adapter == null || !adapter.isEnabled) {
+            Toast.makeText(this, "Active le Bluetooth du téléphone d'abord", Toast.LENGTH_SHORT).show()
+            return
         }
+        if (btBridgeEnabled) {
+            btBridgeEnabled = false
+            closeHidProxy()
+            refreshBtStatus()
+            Toast.makeText(this, "Relais Bluetooth arrêté", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (Build.VERSION.SDK_INT >= 28) {
+            try {
+                adapter.getProfileProxy(this, object : BluetoothProfile.ServiceListener {
+                    override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
+                        if (profile == BluetoothProfile.HID_DEVICE) {
+                            hidDevice = proxy as? BluetoothHidDevice
+                            btBridgeEnabled = true
+                            refreshBtStatus()
+                        }
+                    }
+
+                    override fun onServiceDisconnected(profile: Int) {
+                        if (profile == BluetoothProfile.HID_DEVICE) {
+                            hidDevice = null
+                            btBridgeEnabled = false
+                            refreshBtStatus()
+                        }
+                    }
+                }, BluetoothProfile.HID_DEVICE)
+                btBridgeEnabled = true
+                refreshBtStatus()
+                Toast.makeText(this, "Relais Bluetooth prêt ($targetConsoleMode)", Toast.LENGTH_SHORT).show()
+            } catch (_: SecurityException) {
+                Toast.makeText(this, "Permission Bluetooth requise dans les réglages", Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            btBridgeEnabled = true
+            refreshBtStatus()
+            Toast.makeText(this, "Mode relais activé", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun closeHidProxy() {
+        val adapter = btAdapter
+        val proxy = hidDevice
+        if (adapter != null && proxy != null && Build.VERSION.SDK_INT >= 28) {
+            try {
+                adapter.closeProfileProxy(BluetoothProfile.HID_DEVICE, proxy)
+            } catch (_: Exception) {
+            }
+        }
+        hidDevice = null
+    }
+
+    private fun refreshBtStatus() {
+        if (!::btStatusText.isInitialized) return
+        val btOn = btAdapter?.isEnabled == true
+        val hidReady = hidDevice != null
+        val padName = gamepads().firstOrNull()?.name ?: "Aucune manette locale"
+        btStatusText.text =
+            "Bluetooth : ${if (btOn) "ACTIF" else "INACTIF"} | Cible : $targetConsoleMode\n" +
+                "Manette source : $padName\n" +
+                "Relais : ${if (btBridgeEnabled) "ACTIF" else "INACTIF"} | HID : ${if (hidReady) "PRÊT" else "ATTENTE"}"
     }
 
     private fun activeProfileKey(): String {
@@ -737,449 +1505,26 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
             .apply()
     }
 
-    private fun buildDevicesPanel(): View {
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = glassSurface(iceCyan, glassCard)
-            setPadding(dp(16), dp(16), dp(16), dp(16))
-        }
-
-        val heading = TextView(this).apply {
-            text = "Appareils & Retour Haptique"
-            setTextColor(iceCyan)
-            textSize = 15f
-            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
-        }
-        box.addView(heading)
-
-        devicesText = TextView(this).apply {
-            setTextColor(textFrost)
-            textSize = 12f
-            typeface = Typeface.MONOSPACE
-            setPadding(0, dp(8), 0, dp(10))
-        }
-        box.addView(devicesText)
-
-        vibAmpLabel = TextView(this).apply {
-            text = "Intensité vibration : ${(vibAmplitude * 100) / 255}%"
-            setTextColor(textFrost)
-            textSize = 12f
-        }
-        box.addView(vibAmpLabel)
-
-        seekVibAmp = SeekBar(this).apply {
-            max = 255
-            progress = vibAmplitude
-            if (Build.VERSION.SDK_INT >= 21) {
-                progressTintList = ColorStateList.valueOf(iceCoral)
-                thumbTintList = ColorStateList.valueOf(textFrost)
-            }
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) {
-                    val v = p.coerceAtLeast(1)
-                    vibAmplitude = v
-                    prefs.edit().putInt("vibAmp", v).apply()
-                    vibAmpLabel.text = "Intensité vibration : ${(v * 100) / 255}%"
-                }
-                override fun onStartTrackingTouch(s: SeekBar?) {}
-                override fun onStopTrackingTouch(s: SeekBar?) {}
-            })
-        }
-        box.addView(seekVibAmp)
-
-        vibDurLabel = TextView(this).apply {
-            text = "Durée vibration : ${vibDurationMs} ms"
-            setTextColor(textFrost)
-            textSize = 12f
-            setPadding(0, dp(8), 0, 0)
-        }
-        box.addView(vibDurLabel)
-
-        seekVibDur = SeekBar(this).apply {
-            max = 1450
-            progress = (vibDurationMs - 50).coerceIn(0, 1450)
-            if (Build.VERSION.SDK_INT >= 21) {
-                progressTintList = ColorStateList.valueOf(iceCyan)
-                thumbTintList = ColorStateList.valueOf(textFrost)
-            }
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) {
-                    val ms = p + 50
-                    vibDurationMs = ms
-                    prefs.edit().putInt("vibDur", ms).apply()
-                    vibDurLabel.text = "Durée vibration : ${ms} ms"
-                }
-                override fun onStartTrackingTouch(s: SeekBar?) {}
-                override fun onStopTrackingTouch(s: SeekBar?) {}
-            })
-        }
-        box.addView(seekVibDur)
-
-        val scanBtn = Button(this)
-        styleGlassButton(scanBtn, "Actualiser & Charger Profil", iceBlue) {
-            loadActiveProfileOffsets()
-            refreshDevices()
-            refreshBtStatus()
-            refresh()
-            Toast.makeText(this, "Profil manette synchronisé", Toast.LENGTH_SHORT).show()
-        }
-        box.addView(scanBtn)
-
-        val vibBtn = Button(this)
-        styleGlassButton(vibBtn, "Tester la Vibration", iceCyan) {
-            vibrer()
-        }
-        box.addView(vibBtn)
-
-        return wrapScroll(box)
-    }
-
-    private fun buildJoysticksPanel(): View {
-        val col = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-        }
-
-        val radarCard = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = glassSurface(iceCyan, glassCard)
-            setPadding(dp(14), dp(14), dp(14), dp(14))
-        }
-
-        val heading = TextView(this).apply {
-            text = "Radar Précision, Circularité & Snapback"
-            setTextColor(iceCyan)
-            textSize = 14f
-            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
-            setPadding(0, 0, 0, dp(8))
-        }
-        radarCard.addView(heading)
-
-        radarView = JoystickRadarView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(240)
-            )
-        }
-        radarCard.addView(radarView)
-
-        val resetCircleBtn = Button(this)
-        styleGlassButton(resetCircleBtn, "Réinitialiser Circularité & Snapback", iceBlue) {
-            resetCircleMetrics()
-        }
-        radarCard.addView(resetCircleBtn)
-
-        col.addView(radarCard)
-
-        val diagCard = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = glassSurface(glassBorder, glassCard)
-            setPadding(dp(16), dp(14), dp(16), dp(14))
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                topMargin = dp(10)
-            }
-        }
-
-        driftSummaryText = TextView(this).apply {
-            setTextColor(textFrost)
-            textSize = 12f
-            typeface = Typeface.MONOSPACE
-        }
-        diagCard.addView(driftSummaryText)
-
-        col.addView(diagCard)
-        return wrapScroll(col)
-    }
-
-    private fun buildInputsPanel(): View {
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = glassSurface(iceGold, glassCard)
-            setPadding(dp(16), dp(16), dp(16), dp(16))
-        }
-
-        val heading = TextView(this).apply {
-            text = "Gâchettes, Axes & Journal Brut"
-            setTextColor(iceGold)
-            textSize = 14f
-            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
-            setPadding(0, 0, 0, dp(8))
-        }
-        box.addView(heading)
-
-        val lblL = TextView(this).apply {
-            text = "Gâchette L (0–100%)"
-            setTextColor(iceCyan)
-            textSize = 12f
-        }
-        box.addView(lblL)
-
-        barTrigL = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
-            max = 100
-            if (Build.VERSION.SDK_INT >= 21) {
-                progressTintList = ColorStateList.valueOf(iceCyan)
-            }
-        }
-        box.addView(barTrigL)
-
-        val lblR = TextView(this).apply {
-            text = "Gâchette R (0–100%)"
-            setTextColor(iceCoral)
-            textSize = 12f
-            setPadding(0, dp(6), 0, 0)
-        }
-        box.addView(lblR)
-
-        barTrigR = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
-            max = 100
-            if (Build.VERSION.SDK_INT >= 21) {
-                progressTintList = ColorStateList.valueOf(iceCoral)
-            }
-        }
-        box.addView(barTrigR)
-
-        trigDiagText = TextView(this).apply {
-            setTextColor(iceGold)
-            textSize = 11f
-            typeface = Typeface.MONOSPACE
-            setPadding(0, dp(6), 0, dp(8))
-        }
-        box.addView(trigDiagText)
-
-        liveText = TextView(this).apply {
-            setTextColor(textFrost)
-            textSize = 12f
-            typeface = Typeface.MONOSPACE
-        }
-        box.addView(liveText)
-
-        val logTitle = TextView(this).apply {
-            text = "\nJournal des événements"
-            setTextColor(iceCyan)
-            textSize = 12f
-            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
-        }
-        box.addView(logTitle)
-
-        eventLogText = TextView(this).apply {
-            setTextColor(textMist)
-            textSize = 11f
-            typeface = Typeface.MONOSPACE
-            setPadding(0, dp(4), 0, 0)
-        }
-        box.addView(eventLogText)
-
-        return wrapScroll(box)
-    }
-
-    private fun buildCalibrationPanel(): View {
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = glassSurface(iceMint, glassCard)
-            setPadding(dp(16), dp(16), dp(16), dp(16))
-        }
-
-        val heading = TextView(this).apply {
-            text = "Calibration & Zones Mortes"
-            setTextColor(iceMint)
-            textSize = 14f
-            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
-        }
-        box.addView(heading)
-
-        calibStatusText = TextView(this).apply {
-            setTextColor(textMist)
-            textSize = 12f
-            typeface = Typeface.MONOSPACE
-            setPadding(0, dp(8), 0, dp(10))
-        }
-        box.addView(calibStatusText)
-
-        labelL = TextView(this).apply {
-            text = "Zone morte gauche : $dzL %"
-            setTextColor(textFrost)
-            textSize = 12f
-            setPadding(0, dp(6), 0, dp(4))
-        }
-        box.addView(labelL)
-
-        seekL = makeSeek(dzL, iceCyan) {
-            dzL = it
-            prefs.edit().putInt("dzL", it).apply()
-            labelL.text = "Zone morte gauche : $it %"
-            refresh()
-        }
-        box.addView(seekL)
-
-        labelR = TextView(this).apply {
-            text = "Zone morte droite : $dzR %"
-            setTextColor(textFrost)
-            textSize = 12f
-            setPadding(0, dp(14), 0, dp(4))
-        }
-        box.addView(labelR)
-
-        seekR = makeSeek(dzR, iceCoral) {
-            dzR = it
-            prefs.edit().putInt("dzR", it).apply()
-            labelR.text = "Zone morte droite : $it %"
-            refresh()
-        }
-        box.addView(seekR)
-
-        val calBtn = Button(this)
-        styleGlassButton(calBtn, "Calibrer le Profil Actuel", iceMint) {
-            calibrer()
-        }
-        box.addView(calBtn)
-
-        val rstBtn = Button(this)
-        styleGlassButton(rstBtn, "Réinitialiser les Réglages", iceGold) {
-            reinitialiser()
-        }
-        box.addView(rstBtn)
-
-        return wrapScroll(box)
-    }
-
-    private fun buildFunPanel(): View {
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = glassSurface(iceViolet, glassCard)
-            setPadding(dp(16), dp(16), dp(16), dp(16))
-        }
-
-        val heading = TextView(this).apply {
-            text = "Zone Fun & Lumière"
-            setTextColor(iceViolet)
-            textSize = 14f
-            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
-        }
-        box.addView(heading)
-
-        funStatsText = TextView(this).apply {
-            setTextColor(textFrost)
-            textSize = 12f
-            typeface = Typeface.MONOSPACE
-            setPadding(0, dp(8), 0, dp(10))
-        }
-        box.addView(funStatsText)
-
-        val ledTitle = TextView(this).apply {
-            text = "Couleur Lumière (Style PlayStation)"
-            setTextColor(iceCyan)
-            textSize = 12f
-            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
-        }
-        box.addView(ledTitle)
-
-        ledPreviewView = View(this).apply {
-            background = GradientDrawable().apply {
-                setColor(selectedLedColor)
-                cornerRadius = dp(10).toFloat()
-            }
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(28)
-            ).apply {
-                topMargin = dp(6)
-                bottomMargin = dp(6)
-            }
-        }
-        box.addView(ledPreviewView)
-
-        ledStatusText = TextView(this).apply {
-            text = "Couleur : $selectedLedName"
-            setTextColor(textMist)
-            textSize = 11f
-            typeface = Typeface.MONOSPACE
-        }
-        box.addView(ledStatusText)
-
-        val colorsRow1 = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, dp(6), 0, 0)
-        }
-        val colorsRow2 = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, dp(6), 0, dp(6))
-        }
-
-        val palette1 = listOf(
-            Triple("BLEU PS", Color.parseColor("#0055FF"), Color.parseColor("#0055FF")),
-            Triple("CORAIL", iceCoral, iceCoral),
-            Triple("CYAN", iceCyan, iceCyan)
-        )
-        val palette2 = listOf(
-            Triple("MENTHE", iceMint, iceMint),
-            Triple("VIOLET", iceViolet, iceViolet),
-            Triple("OR", iceGold, iceGold)
-        )
-
-        for ((name, col, stroke) in palette1) {
-            colorsRow1.addView(makeColorChip(name, col, stroke))
-        }
-        for ((name, col, stroke) in palette2) {
-            colorsRow2.addView(makeColorChip(name, col, stroke))
-        }
-
-        box.addView(colorsRow1)
-        box.addView(colorsRow2)
-
-        val panicBtn = Button(this)
-        styleGlassButton(panicBtn, "Bouton Panique / Rage Quit", iceCoral) {
-            triggerRageQuit()
-        }
-        box.addView(panicBtn)
-
-        val resetFunBtn = Button(this)
-        styleGlassButton(resetFunBtn, "Reset Mash & Drift-o-mètre", iceCyan) {
-            peakCps = 0.0
-            driftEvents = 0
-            snapbackCount = 0
-            maxTrigL = 0f
-            maxTrigR = 0f
-            pressTimestamps.clear()
-            refresh()
-            Toast.makeText(this, "Compteurs fun remis à zéro", Toast.LENGTH_SHORT).show()
-        }
-        box.addView(resetFunBtn)
-
-        return wrapScroll(box)
-    }
-
-    private fun makeColorChip(label: String, colorInt: Int, strokeInt: Int): Button {
-        return Button(this).apply {
-            text = label
-            textSize = 10f
-            setTextColor(textFrost)
-            isAllCaps = false
-            background = glassButtonBg(strokeInt, glassCardAlt)
-            setPadding(dp(6), dp(8), dp(6), dp(8))
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-                marginEnd = dp(4)
-            }
-            setOnClickListener {
-                applyControllerLight(label, colorInt)
-            }
-        }
-    }
-
     private fun applyControllerLight(name: String, colorInt: Int) {
         selectedLedName = name
         selectedLedColor = colorInt
-        ledPreviewView.background = GradientDrawable().apply {
-            setColor(colorInt)
-            cornerRadius = dp(10).toFloat()
+        if (::ledPreviewView.isInitialized) {
+            ledPreviewView.background = GradientDrawable().apply {
+                setColor(colorInt)
+                cornerRadius = dp(10).toFloat()
+            }
         }
-        ledStatusText.text = "Couleur : $name (#${Integer.toHexString(colorInt).uppercase()}) – Aperçu glace actif"
+        if (::ledStatusText.isInitialized) {
+            ledStatusText.text = "Couleur : $name (#${Integer.toHexString(colorInt).uppercase()})"
+        }
+        if (::heroPadPreview.isInitialized) {
+            heroPadPreview.setGlowColor(colorInt)
+        }
         logEvent("LED -> $name")
     }
 
     private fun triggerRageQuit() {
-        applyControllerLight("ALERTE CORAIL", iceCoral)
+        applyControllerLight("ALERTE ROUGE", crimsonGlow)
         vibrer()
         logEvent("PANIQUE / RAGE QUIT")
         Toast.makeText(
@@ -1202,26 +1547,6 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         snapbackCount = 0
         refresh()
         Toast.makeText(this, "Circularité réinitialisée", Toast.LENGTH_SHORT).show()
-    }
-
-    private fun selectTab(index: Int) {
-        currentTab = index
-        val accents = listOf(iceCyan, iceBlue, iceGold, iceMint, iceBlue, iceViolet, iceCoral)
-        tabButtons.forEachIndexed { i, btn ->
-            val active = i == index
-            val accent = accents[i]
-            btn.background = if (active) {
-                glassButtonBg(accent, glassCardAlt)
-            } else {
-                glassSurface(glassBorder, glassCard)
-            }
-            btn.setTextColor(if (active) accent else textMist)
-        }
-        tabPanels.forEachIndexed { i, panel ->
-            panel.visibility = if (i == index) View.VISIBLE else View.GONE
-        }
-        refreshBtStatus()
-        refresh()
     }
 
     override fun onResume() {
@@ -1269,7 +1594,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
             progress = initial
             if (Build.VERSION.SDK_INT >= 21) {
                 progressTintList = ColorStateList.valueOf(accent)
-                thumbTintList = ColorStateList.valueOf(textFrost)
+                thumbTintList = ColorStateList.valueOf(textPure)
             }
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) {
@@ -1293,8 +1618,36 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
     }
 
     private fun refreshDevices() {
-        if (!::devicesText.isInitialized) return
         val list = gamepads()
+        val first = list.firstOrNull()
+
+        if (::heroStatusDot.isInitialized) {
+            heroStatusDot.background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(if (first != null) mintOnline else crimsonGlow)
+            }
+        }
+        if (::heroStatusTitle.isInitialized) {
+            heroStatusTitle.text = if (first != null) "Manette connectée" else "Aucune manette"
+        }
+        if (::heroModelLabel.isInitialized) {
+            heroModelLabel.text = first?.name ?: "USB-C OTG ou Bluetooth"
+        }
+        if (::heroBatteryLabel.isInitialized) {
+            var batText = "🔋 -- %"
+            if (first != null && Build.VERSION.SDK_INT >= 31) {
+                try {
+                    val b = first.batteryState
+                    if (b.isPresent && !b.capacity.isNaN()) {
+                        batText = "🔋 ${(b.capacity * 100).toInt()} %"
+                    }
+                } catch (_: Exception) {
+                }
+            }
+            heroBatteryLabel.text = batText
+        }
+
+        if (!::devicesText.isInitialized) return
         if (list.isEmpty()) {
             devicesText.text = "Aucune manette détectée.\nConnecte une manette en USB-C OTG ou Bluetooth."
             return
@@ -1534,6 +1887,10 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
     }
 
     private fun vibrer() {
+        if (!vibrationEnabled) {
+            Toast.makeText(this, "Vibration désactivée", Toast.LENGTH_SHORT).show()
+            return
+        }
         var triggered = false
         val d = gamepads().firstOrNull()
         if (d != null) {
@@ -1565,7 +1922,6 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
             }
             if (pulseVibrator(phoneVib)) {
                 triggered = true
-                Toast.makeText(this, "Vibration sur le téléphone (moteur manette absent/bloqué)", Toast.LENGTH_SHORT).show()
             }
         }
 
@@ -1579,10 +1935,14 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
     private fun f(v: Float): String = String.format("%+.2f", v)
 
     private fun refresh() {
-        if (!::liveText.isInitialized) return
         val l = corriger(rawLX, rawLY, offLX, offLY, dzL)
         val r = corriger(rawRX, rawRY, offRX, offRY, dzR)
 
+        if (::heroPadPreview.isInitialized) {
+            heroPadPreview.updateSticks(l.first, l.second, r.first, r.second)
+        }
+
+        if (!::liveText.isInitialized) return
         val magL = hypot(l.first.toDouble(), l.second.toDouble()).toFloat()
         val magR = hypot(r.first.toDouble(), r.second.toDouble()).toFloat()
 
@@ -1658,20 +2018,187 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         }
     }
 
+    private inner class SmokeBackdropView(context: Context) : View(context) {
+        private val basePaint = Paint().apply {
+            color = bgObsidian
+            style = Paint.Style.FILL
+        }
+
+        private val topSmokePaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val midSmokePaint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+        override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+            super.onSizeChanged(w, h, oldw, oldh)
+            if (w <= 0 || h <= 0) return
+            topSmokePaint.shader = RadialGradient(
+                w * 0.72f,
+                h * 0.08f,
+                max(w, h) * 0.65f,
+                intArrayOf(Color.argb(125, 195, 22, 42), Color.argb(45, 70, 8, 18), Color.TRANSPARENT),
+                floatArrayOf(0f, 0.5f, 1f),
+                Shader.TileMode.CLAMP
+            )
+            midSmokePaint.shader = RadialGradient(
+                w * 0.28f,
+                h * 0.42f,
+                max(w, h) * 0.55f,
+                intArrayOf(Color.argb(110, 165, 16, 36), Color.argb(30, 50, 6, 14), Color.TRANSPARENT),
+                floatArrayOf(0f, 0.55f, 1f),
+                Shader.TileMode.CLAMP
+            )
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), basePaint)
+            canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), topSmokePaint)
+            canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), midSmokePaint)
+        }
+    }
+
+    private inner class ControllerHeroView(context: Context) : View(context) {
+        private var lx = 0f
+        private var ly = 0f
+        private var rx = 0f
+        private var ry = 0f
+        private var glowColor = crimsonGlow
+
+        private val bodyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+        }
+
+        private val rimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = dp(2).toFloat()
+        }
+
+        private val lightBarPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = dp(3).toFloat()
+            strokeCap = Paint.Cap.ROUND
+        }
+
+        private val detailPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.argb(135, 210, 215, 230)
+            style = Paint.Style.STROKE
+            strokeWidth = dp(1.5f)
+        }
+
+        private val stickWellPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.parseColor("#0A0A0E")
+            style = Paint.Style.FILL
+        }
+
+        private val stickCapPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.parseColor("#252732")
+            style = Paint.Style.FILL
+        }
+
+        fun setGlowColor(col: Int) {
+            glowColor = col
+            invalidate()
+        }
+
+        fun updateSticks(leftX: Float, leftY: Float, rightX: Float, rightY: Float) {
+            lx = leftX.coerceIn(-1f, 1f)
+            ly = leftY.coerceIn(-1f, 1f)
+            rx = rightX.coerceIn(-1f, 1f)
+            ry = rightY.coerceIn(-1f, 1f)
+            invalidate()
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            val w = width.toFloat()
+            val h = height.toFloat()
+            if (w <= 0f || h <= 0f) return
+
+            val cx = w / 2f
+            val cy = h * 0.54f
+            val scale = min(w / 320f, h / 160f)
+
+            bodyPaint.shader = LinearGradient(
+                cx, cy - 55f * scale, cx, cy + 65f * scale,
+                intArrayOf(Color.parseColor("#2A2C36"), Color.parseColor("#121318"), Color.parseColor("#090A0D")),
+                null,
+                Shader.TileMode.CLAMP
+            )
+            rimPaint.color = Color.argb(120, Color.red(glowColor), Color.green(glowColor), Color.blue(glowColor))
+            lightBarPaint.color = glowColor
+
+            val shellPath = Path().apply {
+                moveTo(cx - 58f * scale, cy - 36f * scale)
+                cubicTo(cx - 96f * scale, cy - 36f * scale, cx - 114f * scale, cy + 28f * scale, cx - 102f * scale, cy + 56f * scale)
+                cubicTo(cx - 92f * scale, cy + 72f * scale, cx - 72f * scale, cy + 64f * scale, cx - 54f * scale, cy + 24f * scale)
+                lineTo(cx + 54f * scale, cy + 24f * scale)
+                cubicTo(cx + 72f * scale, cy + 64f * scale, cx + 92f * scale, cy + 72f * scale, cx + 102f * scale, cy + 56f * scale)
+                cubicTo(cx + 114f * scale, cy + 28f * scale, cx + 96f * scale, cy - 36f * scale, cx + 58f * scale, cy - 36f * scale)
+                close()
+            }
+            canvas.drawPath(shellPath, bodyPaint)
+            canvas.drawPath(shellPath, rimPaint)
+
+            val padRect = RectF(cx - 28f * scale, cy - 32f * scale, cx + 28f * scale, cy + 4f * scale)
+            canvas.drawRoundRect(padRect, 8f * scale, 8f * scale, stickWellPaint)
+            canvas.drawRoundRect(padRect, 8f * scale, 8f * scale, detailPaint)
+
+            val leftLight = Path().apply {
+                moveTo(cx - 34f * scale, cy - 28f * scale)
+                lineTo(cx - 24f * scale, cy + 10f * scale)
+            }
+            val rightLight = Path().apply {
+                moveTo(cx + 34f * scale, cy - 28f * scale)
+                lineTo(cx + 24f * scale, cy + 10f * scale)
+            }
+            canvas.drawPath(leftLight, lightBarPaint)
+            canvas.drawPath(rightLight, lightBarPaint)
+
+            val dpadCx = cx - 64f * scale
+            val dpadCy = cy - 6f * scale
+            canvas.drawRect(dpadCx - 13f * scale, dpadCy - 4f * scale, dpadCx + 13f * scale, dpadCy + 4f * scale, detailPaint)
+            canvas.drawRect(dpadCx - 4f * scale, dpadCy - 13f * scale, dpadCx + 4f * scale, dpadCy + 13f * scale, detailPaint)
+
+            val faceCx = cx + 64f * scale
+            val faceCy = cy - 6f * scale
+            val rBtn = 5.5f * scale
+            canvas.drawCircle(faceCx, faceCy - 12f * scale, rBtn, detailPaint)
+            canvas.drawCircle(faceCx, faceCy + 12f * scale, rBtn, detailPaint)
+            canvas.drawCircle(faceCx - 12f * scale, faceCy, rBtn, detailPaint)
+            canvas.drawCircle(faceCx + 12f * scale, faceCy, rBtn, detailPaint)
+
+            val lWellX = cx - 34f * scale
+            val lWellY = cy + 20f * scale
+            val rWellX = cx + 34f * scale
+            val rWellY = cy + 20f * scale
+            val wellR = 12f * scale
+
+            canvas.drawCircle(lWellX, lWellY, wellR, stickWellPaint)
+            canvas.drawCircle(lWellX, lWellY, wellR, detailPaint)
+            canvas.drawCircle(rWellX, rWellY, wellR, stickWellPaint)
+            canvas.drawCircle(rWellX, rWellY, wellR, detailPaint)
+
+            val capR = 7.5f * scale
+            canvas.drawCircle(lWellX + lx * 6f * scale, lWellY + ly * 6f * scale, capR, stickCapPaint)
+            canvas.drawCircle(lWellX + lx * 6f * scale, lWellY + ly * 6f * scale, capR, detailPaint)
+            canvas.drawCircle(rWellX + rx * 6f * scale, rWellY + ry * 6f * scale, capR, stickCapPaint)
+            canvas.drawCircle(rWellX + rx * 6f * scale, rWellY + ry * 6f * scale, capR, detailPaint)
+        }
+    }
+
     private inner class FpsArenaView(context: Context) : View(context) {
         private val bgPaint = Paint().apply {
-            color = Color.parseColor("#0B1222")
+            color = Color.parseColor("#0D090C")
             style = Paint.Style.FILL
         }
 
         private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = iceCyan
+            color = crimsonGlow
             style = Paint.Style.STROKE
             strokeWidth = dp(2).toFloat()
         }
 
         private val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.parseColor("#182542")
+            color = Color.parseColor("#2A131A")
             style = Paint.Style.STROKE
             strokeWidth = dp(1).toFloat()
         }
@@ -1682,26 +2209,26 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         }
 
         private val aimLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.argb(130, 56, 232, 255)
+            color = Color.argb(140, 255, 42, 60)
             style = Paint.Style.STROKE
             strokeWidth = dp(1).toFloat()
             pathEffect = DashPathEffect(floatArrayOf(dp(5).toFloat(), dp(5).toFloat()), 0f)
         }
 
         private val beamPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = iceCoral
+            color = crimsonGlow
             style = Paint.Style.STROKE
             strokeWidth = dp(3).toFloat()
         }
 
         private val targetOuterPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = iceCoral
+            color = crimsonGlow
             style = Paint.Style.STROKE
             strokeWidth = dp(2).toFloat()
         }
 
         private val targetCorePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.argb(75, 255, 77, 109)
+            color = Color.argb(80, 255, 42, 60)
             style = Paint.Style.FILL
         }
 
@@ -1719,10 +2246,10 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
             val cx = left + half
             val cy = top + half
 
-            canvas.drawRoundRect(left, top, left + arenaSize, top + arenaSize, dp(14).toFloat(), dp(14).toFloat(), bgPaint)
+            canvas.drawRoundRect(left, top, left + arenaSize, top + arenaSize, dp(16).toFloat(), dp(16).toFloat(), bgPaint)
             canvas.drawLine(cx, top, cx, top + arenaSize, gridPaint)
             canvas.drawLine(left, cy, left + arenaSize, cy, gridPaint)
-            canvas.drawRoundRect(left, top, left + arenaSize, top + arenaSize, dp(14).toFloat(), dp(14).toFloat(), borderPaint)
+            canvas.drawRoundRect(left, top, left + arenaSize, top + arenaSize, dp(16).toFloat(), dp(16).toFloat(), borderPaint)
 
             for (t in fpsTargets) {
                 val tx = cx + t.x * half
@@ -1766,20 +2293,20 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         private var dzRPct = 10
 
         private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.parseColor("#35507A")
+            color = Color.parseColor("#472934")
             style = Paint.Style.STROKE
             strokeWidth = dp(1).toFloat()
         }
 
         private val crossPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.parseColor("#1F304D")
+            color = Color.parseColor("#2B1720")
             style = Paint.Style.STROKE
             strokeWidth = dp(1).toFloat()
             pathEffect = DashPathEffect(floatArrayOf(dp(4).toFloat(), dp(4).toFloat()), 0f)
         }
 
         private val dzPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.argb(45, 255, 200, 87)
+            color = Color.argb(45, 255, 201, 92)
             style = Paint.Style.FILL
         }
 
@@ -1790,7 +2317,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         }
 
         private val rawDotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = iceCoral
+            color = crimsonGlow
             style = Paint.Style.FILL
         }
 
@@ -1800,7 +2327,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         }
 
         private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = textFrost
+            color = textPure
             textSize = dp(11).toFloat()
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
         }
@@ -1873,7 +2400,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
 
             val distPct = (hypot(rx.toDouble(), ry.toDouble()) * 100.0).toInt()
             val misaligned = hypot(rx.toDouble(), ry.toDouble()) > (dzPct / 100.0)
-            alertPaint.color = if (misaligned) iceCoral else iceMint
+            alertPaint.color = if (misaligned) crimsonGlow else mintOnline
             val status = if (misaligned) "MAL PLACÉ ($distPct%)" else "ALIGNÉ ($distPct%)"
             canvas.drawText(status, cx - radius, cy + radius + dp(16), alertPaint)
         }
