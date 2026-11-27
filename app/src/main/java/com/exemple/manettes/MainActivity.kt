@@ -279,7 +279,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
     private var dzL = 10
     private var dzR = 10
 
-    // Calibration multi-échantillons
+    // Calibration multi-échantillons (20 lectures à 20 ms)
     private var isCalibrating = false
     private val calibSamplesLX = mutableListOf<Float>()
     private val calibSamplesLY = mutableListOf<Float>()
@@ -2166,4 +2166,1485 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
             return
         }
 
-        val move =
+        val move = corriger(rawLX, rawLY, offLX, offLY, dzL)
+        val look = corriger(rawRX, rawRY, offRX, offRY, dzR)
+        val adsActive = isAdsEngaged()
+        val lookScale = (if (adsActive) 0.038 else 0.068) * (if (now < slowMoUntil) 0.7 else 1.0)
+        val yDir = if (invertLookY) -1.0 else 1.0
+
+        playerAngle += look.first * lookScale * yDir
+        val crouchFactor = if (crouchSlideActive) 0.68 else 1.0
+        val moveScale = ((if (adsActive) 0.042 else 0.062) * crouchFactor + slideBoost) *
+            (if (now < slowMoUntil) 0.75 else 1.0)
+        val forward = -move.second * moveScale
+        val strafe = move.first * (moveScale * 0.85)
+
+        val stepX = cos(playerAngle) * forward - sin(playerAngle) * strafe
+        val stepY = sin(playerAngle) * forward + cos(playerAngle) * strafe
+        val margin = 0.24
+
+        if (isWalkable(playerX + stepX + (if (stepX > 0) margin else -margin), playerY)) {
+            playerX += stepX
+        }
+        if (isWalkable(playerX, playerY + stepY + (if (stepY > 0) margin else -margin))) {
+            playerY += stepY
+        }
+
+        for (kit in medKits) {
+            if (kit.active && hypot(kit.x - playerX, kit.y - playerY) < 0.65) {
+                kit.active = false
+                playerHealth = min(100, playerHealth + 35)
+                playSynthTone(780.0, 90, 0.22f)
+                pushKillFeed("+35 HP SOIN")
+            }
+        }
+
+        if (effectiveTrigger(trigR) > 0.62f) {
+            fire3DWeapon()
+        }
+
+        val botMode = botModes[currentBotModeIndex]
+        for (bot in enemyBots) {
+            val dx = playerX - bot.x
+            val dy = playerY - bot.y
+            val dist = hypot(dx, dy)
+            val range = if (bot.role == BotRole.SNIPER) 10.5 else 8.5
+            val seesPlayer = botMode != "ENTRAINEMENT" && dist < range && hasLineOfSight(bot.x, bot.y, playerX, playerY)
+
+            if (seesPlayer) {
+                bot.moveAngle = atan2(dy, dx)
+                val roleSpeed = when (bot.role) {
+                    BotRole.RUSHER -> 0.034
+                    BotRole.TANK -> 0.016
+                    BotRole.SNIPER -> 0.015
+                }
+                val chaseSpeed = roleSpeed * (if (botMode == "AGRESSIF") 1.25 else 0.9) * timeFactor
+                val minDist = if (bot.role == BotRole.SNIPER) 4.2 else 1.7
+                if (dist > minDist) {
+                    val bvx = cos(bot.moveAngle) * chaseSpeed
+                    val bvy = sin(bot.moveAngle) * chaseSpeed
+                    if (isWalkable(bot.x + bvx, bot.y)) bot.x += bvx
+                    if (isWalkable(bot.x, bot.y + bvy)) bot.y += bvy
+                }
+                val attackCd = if (bot.role == BotRole.SNIPER) 1650L else 1200L
+                if (now - bot.lastAttackMs > attackCd) {
+                    bot.lastAttackMs = now
+                    val botDmg = when (bot.role) {
+                        BotRole.SNIPER -> 14
+                        BotRole.TANK -> 11
+                        BotRole.RUSHER -> 8
+                    }
+                    playerHealth = max(0, playerHealth - botDmg)
+                    damageFlashUntil = now + 180L
+                    playHapticPattern("HEARTBEAT")
+                    playSynthTone(115.0, 80, 0.25f)
+                }
+            } else {
+                val patrolSpeed = (if (botMode == "ENTRAINEMENT") 0.012 else 0.018) * timeFactor
+                val bvx = cos(bot.moveAngle) * patrolSpeed
+                val bvy = sin(bot.moveAngle) * patrolSpeed
+                if (isWalkable(bot.x + bvx, bot.y + bvy)) {
+                    bot.x += bvx
+                    bot.y += bvy
+                } else {
+                    bot.moveAngle += Random.nextDouble(1.1, 2.5)
+                }
+            }
+        }
+
+        updateFpsHud()
+        if (::fpsArenaView.isInitialized) {
+            fpsArenaView.invalidate()
+        }
+    }
+
+    private fun updateFpsHud() {
+        if (!::fpsHudText.isInitialized) return
+        val acc = if (fpsShots > 0) (fpsHits * 100) / fpsShots else 0
+        val maxAmmo = weaponMagSizes[weaponModes[currentWeaponIndex]] ?: 30
+        val ammoLabel = if (isReloading) "RECH..." else "$ammoInMag/$maxAmmo"
+        val heatPct = weaponHeat.toInt()
+        val duelTag = if (duelModeActive) " | J${duelPlayerTurn} ($duelP1Kills/$duelP2Kills)" else ""
+        fpsHudText.text = if (playerHealth > 0) {
+            "HP $playerHealth% | MUN $ammoLabel | KILLS $fpsKills | V$fpsWave | CHAUFFE $heatPct% | PRÉC $acc%$duelTag"
+        } else {
+            "ÉLIMINÉ — Appuie sur R2 / A ou Relancer (Kills : $fpsKills | Record : $bestKills)"
+        }
+    }
+
+    private fun toggleBtBridge() {
+        val adapter = btAdapter
+        if (adapter == null || !adapter.isEnabled) {
+            Toast.makeText(this, "Active le Bluetooth du téléphone d'abord", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (btBridgeEnabled) {
+            btBridgeEnabled = false
+            closeHidProxy()
+            refreshBtStatus()
+            Toast.makeText(this, "Relais Bluetooth arrêté", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (Build.VERSION.SDK_INT >= 28) {
+            try {
+                adapter.getProfileProxy(this, object : BluetoothProfile.ServiceListener {
+                    override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
+                        if (profile == BluetoothProfile.HID_DEVICE) {
+                            hidDevice = proxy as? BluetoothHidDevice
+                            btBridgeEnabled = true
+                            refreshBtStatus()
+                        }
+                    }
+
+                    override fun onServiceDisconnected(profile: Int) {
+                        if (profile == BluetoothProfile.HID_DEVICE) {
+                            hidDevice = null
+                            btBridgeEnabled = false
+                            refreshBtStatus()
+                        }
+                    }
+                }, BluetoothProfile.HID_DEVICE)
+                btBridgeEnabled = true
+                refreshBtStatus()
+                Toast.makeText(this, "Relais Bluetooth prêt ($targetConsoleMode)", Toast.LENGTH_SHORT).show()
+            } catch (_: SecurityException) {
+                Toast.makeText(this, "Permission Bluetooth requise dans les réglages", Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            btBridgeEnabled = true
+            refreshBtStatus()
+            Toast.makeText(this, "Mode relais activé", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun closeHidProxy() {
+        val adapter = btAdapter
+        val proxy = hidDevice
+        if (adapter != null && proxy != null && Build.VERSION.SDK_INT >= 28) {
+            try {
+                adapter.closeProfileProxy(BluetoothProfile.HID_DEVICE, proxy)
+            } catch (_: Exception) {
+            }
+        }
+        hidDevice = null
+    }
+
+    private fun refreshBtStatus() {
+        if (!::btStatusText.isInitialized) return
+        val btOn = btAdapter?.isEnabled == true
+        val hidReady = hidDevice != null
+        val padName = gamepads().firstOrNull()?.name ?: "Aucune manette locale"
+        btStatusText.text =
+            "Bluetooth : ${if (btOn) "ACTIF" else "INACTIF"} | Cible : $targetConsoleMode\n" +
+                "Manette source : $padName\n" +
+                "Relais : ${if (btBridgeEnabled) "ACTIF" else "INACTIF"} | HID : ${if (hidReady) "PRÊT" else "ATTENTE"}"
+    }
+
+    private fun activeProfileKey(): String {
+        val dev = gamepads().firstOrNull() ?: return "default"
+        return "prof_${String.format("%04x_%04x", dev.vendorId, dev.productId)}_${dev.name}"
+    }
+
+    private fun loadActiveProfileOffsets() {
+        val key = activeProfileKey()
+        offLX = prefs.getFloat("${key}_offLX", prefs.getFloat("offLX", 0f))
+        offLY = prefs.getFloat("${key}_offLY", prefs.getFloat("offLY", 0f))
+        offRX = prefs.getFloat("${key}_offRX", prefs.getFloat("offRX", 0f))
+        offRY = prefs.getFloat("${key}_offRY", prefs.getFloat("offRY", 0f))
+        if (lockProfileToPad) {
+            val savedPreset = prefs.getString("${key}_preset", null)
+            if (!savedPreset.isNullOrBlank()) {
+                activePresetName = savedPreset
+            }
+        }
+    }
+
+    private fun saveActiveProfileOffsets() {
+        val key = activeProfileKey()
+        prefs.edit()
+            .putFloat("${key}_offLX", offLX)
+            .putFloat("${key}_offLY", offLY)
+            .putFloat("${key}_offRX", offRX)
+            .putFloat("${key}_offRY", offRY)
+            .putFloat("offLX", offLX)
+            .putFloat("offLY", offLY)
+            .putFloat("offRX", offRX)
+            .putFloat("offRY", offRY)
+            .apply()
+    }
+
+    private fun applyControllerLight(name: String, colorInt: Int) {
+        selectedLedName = name
+        selectedLedColor = colorInt
+        crimsonGlow = colorInt
+        if (::ledPreviewView.isInitialized) {
+            ledPreviewView.background = GradientDrawable().apply {
+                setColor(colorInt)
+                cornerRadius = dp(10).toFloat()
+            }
+        }
+        if (::ledStatusText.isInitialized) {
+            ledStatusText.text = "Couleur : $name (#${Integer.toHexString(colorInt).uppercase()})"
+        }
+        if (::heroPadPreview.isInitialized) {
+            heroPadPreview.setGlowColor(colorInt)
+        }
+        logEvent("LED -> $name")
+    }
+
+    private fun triggerRageQuit() {
+        applyControllerLight("ALERTE ROUGE", Color.parseColor("#FF2A3C"))
+        playHapticPattern("PULSE")
+        playSynthTone(180.0, 140, 0.3f)
+        logEvent("PANIQUE / RAGE QUIT")
+        Toast.makeText(
+            this,
+            "ALERTE : Manette trop nerveuse, prends une pause !",
+            Toast.LENGTH_LONG
+        ).show()
+    }
+
+    private fun logEvent(msg: String) {
+        if (eventLog.size >= 18) eventLog.removeFirst()
+        eventLog.addLast("• $msg")
+    }
+
+    private fun resetCircleMetrics() {
+        maxCircL = 0f
+        maxCircR = 0f
+        sectorsHitL = BooleanArray(12)
+        sectorsHitR = BooleanArray(12)
+        snapbackCount = 0
+        jitterAccumulator = 0f
+        jitterSamples = 0
+        refresh()
+        Toast.makeText(this, "Circularité réinitialisée", Toast.LENGTH_SHORT).show()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        inputManager.registerInputDeviceListener(this, null)
+        refreshDevices()
+        refreshBtStatus()
+        if (fpsActive) {
+            gameHandler.removeCallbacks(fpsLoop)
+            gameHandler.post(fpsLoop)
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        inputManager.unregisterInputDeviceListener(this)
+        gameHandler.removeCallbacks(fpsLoop)
+        gameHandler.removeCallbacks(calibSampleRunnable)
+        isCalibrating = false
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        gameHandler.removeCallbacks(calibSampleRunnable)
+        closeHidProxy()
+    }
+
+    override fun onInputDeviceAdded(deviceId: Int) {
+        loadActiveProfileOffsets()
+        logEvent("Ajout manette #$deviceId")
+        refreshDevices()
+        refreshBtStatus()
+        refresh()
+    }
+
+    override fun onInputDeviceRemoved(deviceId: Int) {
+        logEvent("Retrait manette #$deviceId")
+        refreshDevices()
+        refreshBtStatus()
+        refresh()
+    }
+
+    override fun onInputDeviceChanged(deviceId: Int) = refreshDevices()
+
+    private fun makeSeek(initial: Int, accent: Int, onChange: (Int) -> Unit): SeekBar {
+        return SeekBar(this).apply {
+            max = 50
+            progress = initial
+            if (Build.VERSION.SDK_INT >= 21) {
+                progressTintList = ColorStateList.valueOf(accent)
+                thumbTintList = ColorStateList.valueOf(textPure)
+            }
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) {
+                    if (fromUser) onChange(p)
+                }
+                override fun onStartTrackingTouch(s: SeekBar?) {}
+                override fun onStopTrackingTouch(s: SeekBar?) {}
+            })
+        }
+    }
+
+    private fun gamepads(): List<InputDevice> {
+        return InputDevice.getDeviceIds()
+            .toList()
+            .mapNotNull { id -> InputDevice.getDevice(id) }
+            .filter { dev ->
+                !dev.isVirtual &&
+                    ((dev.sources and InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD ||
+                        (dev.sources and InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK)
+            }
+    }
+
+    private fun refreshDevices() {
+        val list = gamepads()
+        val first = list.firstOrNull()
+
+        if (::heroStatusDot.isInitialized) {
+            heroStatusDot.background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(if (first != null) mintOnline else crimsonGlow)
+            }
+        }
+        if (::heroStatusTitle.isInitialized) {
+            heroStatusTitle.text = if (first != null) "Manette connectée" else "Aucune manette"
+        }
+        if (::heroModelLabel.isInitialized) {
+            heroModelLabel.text = first?.name ?: "USB-C OTG ou Bluetooth"
+        }
+        if (::heroBatteryLabel.isInitialized) {
+            var batText = "🔋 -- %"
+            if (first != null && Build.VERSION.SDK_INT >= 31) {
+                try {
+                    val b = first.batteryState
+                    if (b.isPresent && !b.capacity.isNaN()) {
+                        batText = "🔋 ${(b.capacity * 100).toInt()} %"
+                    }
+                } catch (_: Exception) {
+                }
+            }
+            heroBatteryLabel.text = batText
+        }
+
+        if (!::devicesText.isInitialized) return
+        if (list.isEmpty()) {
+            devicesText.text = "Aucune manette détectée.\nConnecte une manette en USB-C OTG ou Bluetooth."
+            return
+        }
+        val sb = StringBuilder()
+        for (d in list) {
+            sb.append("• ").append(d.name).append("\n")
+            sb.append("  ID ").append(String.format("%04x:%04x", d.vendorId, d.productId))
+            if (Build.VERSION.SDK_INT >= 31) {
+                try {
+                    val b = d.batteryState
+                    if (b.isPresent && !b.capacity.isNaN()) {
+                        sb.append(" | BAT ").append((b.capacity * 100).toInt()).append("%")
+                    }
+                } catch (_: Exception) {
+                }
+            }
+            sb.append("\n\n")
+        }
+        devicesText.text = sb.toString().trimEnd()
+    }
+
+    override fun dispatchGenericMotionEvent(ev: MotionEvent): Boolean {
+        if ((ev.source and InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK &&
+            ev.action == MotionEvent.ACTION_MOVE
+        ) {
+            val now = System.currentTimeMillis()
+            if (lastInputEventMs > 0L) {
+                lastLatencyMs = (now - lastInputEventMs).coerceIn(1L, 250L)
+            }
+            lastInputEventMs = now
+            readAxes(ev)
+            updateStickAnalytics()
+            refresh()
+            return true
+        }
+        return super.dispatchGenericMotionEvent(ev)
+    }
+
+    override fun dispatchKeyEvent(ev: KeyEvent): Boolean {
+        val src = ev.source
+        val isPad = (src and InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD ||
+            (src and InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK
+        if (isPad) {
+            val now = System.currentTimeMillis()
+            if (lastInputEventMs > 0L) {
+                lastLatencyMs = (now - lastInputEventMs).coerceIn(1L, 250L)
+            }
+            lastInputEventMs = now
+
+            val name = KeyEvent.keyCodeToString(ev.keyCode).removePrefix("KEYCODE_")
+            if (ev.action == KeyEvent.ACTION_DOWN) {
+                pressed.add(name)
+                pressTimestamps.addLast(now)
+                while (pressTimestamps.isNotEmpty() && now - pressTimestamps.first() > 1000L) {
+                    pressTimestamps.removeFirst()
+                }
+                peakCps = max(peakCps, pressTimestamps.size.toDouble())
+                logEvent("DOWN $name (${lastLatencyMs}ms)")
+
+                if (fpsActive) {
+                    when (ev.keyCode) {
+                        KeyEvent.KEYCODE_BUTTON_A,
+                        KeyEvent.KEYCODE_BUTTON_R1,
+                        KeyEvent.KEYCODE_DPAD_CENTER,
+                        KeyEvent.KEYCODE_ENTER -> fire3DWeapon()
+                        KeyEvent.KEYCODE_BUTTON_X -> startReload()
+                        KeyEvent.KEYCODE_BUTTON_B -> triggerCrouchSlide()
+                        KeyEvent.KEYCODE_BUTTON_Y -> activateSlowMo()
+                    }
+                }
+                if (turboEnabled && now - lastTurboMs > 85L &&
+                    (ev.keyCode == KeyEvent.KEYCODE_BUTTON_A || ev.keyCode == KeyEvent.KEYCODE_BUTTON_R1)
+                ) {
+                    lastTurboMs = now
+                    fire3DWeapon()
+                }
+            } else if (ev.action == KeyEvent.ACTION_UP) {
+                pressed.remove(name)
+                logEvent("UP $name")
+            }
+            refresh()
+            return true
+        }
+        return super.dispatchKeyEvent(ev)
+    }
+
+    private fun readAxes(ev: MotionEvent) {
+        val dev = ev.device
+        val src = ev.source
+
+        rawLX = ev.getAxisValue(MotionEvent.AXIS_X)
+        rawLY = ev.getAxisValue(MotionEvent.AXIS_Y)
+
+        val hasTriggerAxis = dev?.getMotionRange(MotionEvent.AXIS_LTRIGGER, src) != null ||
+            dev?.getMotionRange(MotionEvent.AXIS_BRAKE, src) != null
+        val hasRx = dev?.getMotionRange(MotionEvent.AXIS_RX, src) != null
+        val useZ = hasTriggerAxis || !hasRx
+
+        rawRX = ev.getAxisValue(if (useZ) MotionEvent.AXIS_Z else MotionEvent.AXIS_RX)
+        rawRY = ev.getAxisValue(if (useZ) MotionEvent.AXIS_RZ else MotionEvent.AXIS_RY)
+
+        trigL = maxOf(
+            ev.getAxisValue(MotionEvent.AXIS_LTRIGGER),
+            ev.getAxisValue(MotionEvent.AXIS_BRAKE)
+        ).coerceIn(0f, 1f)
+        trigR = maxOf(
+            ev.getAxisValue(MotionEvent.AXIS_RTRIGGER),
+            ev.getAxisValue(MotionEvent.AXIS_GAS)
+        ).coerceIn(0f, 1f)
+
+        maxTrigL = max(maxTrigL, trigL)
+        maxTrigR = max(maxTrigR, trigR)
+
+        hatX = ev.getAxisValue(MotionEvent.AXIS_HAT_X)
+        hatY = ev.getAxisValue(MotionEvent.AXIS_HAT_Y)
+    }
+
+    private fun updateStickAnalytics() {
+        val now = System.currentTimeMillis()
+        val magL = hypot(rawLX.toDouble(), rawLY.toDouble()).toFloat()
+        val magR = hypot(rawRX.toDouble(), rawRY.toDouble()).toFloat()
+
+        maxCircL = max(maxCircL, magL)
+        maxCircR = max(maxCircR, magR)
+
+        if (magL > 0.25f) {
+            val secL = ((angleDeg(rawLX, rawLY) / 360f) * 12).toInt().coerceIn(0, 11)
+            sectorsHitL[secL] = true
+
+            val curAng = atan2(rawLY.toDouble(), rawLX.toDouble())
+            if (hasPrevAngleL) {
+                var diff = abs(curAng - lastDirAngleL)
+                if (diff > PI) diff = 2.0 * PI - diff
+                jitterAccumulator += diff.toFloat()
+                jitterSamples++
+            }
+            lastDirAngleL = curAng
+            hasPrevAngleL = true
+        } else {
+            hasPrevAngleL = false
+        }
+
+        if (magR > 0.25f) {
+            val secR = ((angleDeg(rawRX, rawRY) / 360f) * 12).toInt().coerceIn(0, 11)
+            sectorsHitR[secR] = true
+        }
+
+        val dt = now - lastMoveTime
+        if (dt in 1..180) {
+            if ((prevMagL > 0.65f && magL > (dzL / 100f) + 0.08f && abs(magL - prevMagL) > 0.45f) ||
+                (prevMagR > 0.65f && magR > (dzR / 100f) + 0.08f && abs(magR - prevMagR) > 0.45f)
+            ) {
+                snapbackCount++
+                logEvent("SNAPBACK détecté")
+            }
+        }
+
+        val corrL = corriger(rawLX, rawLY, offLX, offLY, dzL)
+        val corrR = corriger(rawRX, rawRY, offRX, offRY, dzR)
+        if (hypot(corrL.first.toDouble(), corrL.second.toDouble()) > 0.05 ||
+            hypot(corrR.first.toDouble(), corrR.second.toDouble()) > 0.05
+        ) {
+            driftEvents++
+            if (pressed.isEmpty() && trigL < 0.05f && trigR < 0.05f && driftEvents % 25 == 0) {
+                ghostInputCount++
+            }
+        }
+
+        prevMagL = magL
+        prevMagR = magR
+        lastMoveTime = now
+    }
+
+    private fun shapeCurve(v: Float): Float {
+        val sign = if (v < 0f) -1f else 1f
+        val a = abs(v).coerceIn(0f, 1f)
+        val shaped = when (stickCurveMode) {
+            "PRECIS" -> a.toDouble().pow(1.45).toFloat()
+            "RAPIDE" -> a.toDouble().pow(0.75).toFloat()
+            else -> a
+        }
+        return sign * shaped
+    }
+
+    private fun normalizeAxisWithOffset(raw: Float, offset: Float): Float {
+        val clampedRaw = raw.coerceIn(-1f, 1f)
+        val clampedOff = offset.coerceIn(-0.85f, 0.85f)
+        val shifted = clampedRaw - clampedOff
+        return if (shifted >= 0f) {
+            val denom = (1f - clampedOff).coerceAtLeast(0.15f)
+            (shifted / denom).coerceIn(0f, 1f)
+        } else {
+            val denom = (1f + clampedOff).coerceAtLeast(0.15f)
+            (shifted / denom).coerceIn(-1f, 0f)
+        }
+    }
+
+    private fun corriger(x: Float, y: Float, ox: Float, oy: Float, dzPercent: Int): Pair<Float, Float> {
+        val nx = normalizeAxisWithOffset(x, ox)
+        val ny = normalizeAxisWithOffset(y, oy)
+        val mag = hypot(nx.toDouble(), ny.toDouble()).toFloat()
+        val dz = (dzPercent / 100f).coerceIn(0f, 0.85f)
+        if (mag <= dz || mag <= 1e-4f) return Pair(0f, 0f)
+
+        val normMag = ((mag - dz) / (1f - dz)).coerceIn(0f, 1f)
+        val shapedMag = shapeCurve(normMag).coerceIn(0f, 1f)
+        val scale = shapedMag / mag
+        return Pair((nx * scale).coerceIn(-1f, 1f), (ny * scale).coerceIn(-1f, 1f))
+    }
+
+    private fun angleDeg(x: Float, y: Float): Float {
+        val deg = Math.toDegrees(atan2(y.toDouble(), x.toDouble())).toFloat()
+        return if (deg < 0f) deg + 360f else deg
+    }
+
+    private fun placementStatus(x: Float, y: Float, dzPercent: Int): String {
+        val dist = hypot(x.toDouble(), y.toDouble()).toFloat()
+        val pct = (dist * 100f).toInt()
+        val deg = angleDeg(x, y).toInt()
+        return when {
+            dist <= 0.03f -> "CENTRÉ ($pct%)"
+            dist <= dzPercent / 100f -> "LÉGER ÉCART ($pct% @ ${deg}°) – zone morte OK"
+            else -> "MAL PLACÉ / DRIFT ($pct% @ ${deg}°) !"
+        }
+    }
+
+    private fun circleRank(maxMag: Float, sectors: BooleanArray): String {
+        val cov = (sectors.count { it } * 100) / 12
+        val pct = (maxMag * 100f).toInt().coerceAtMost(100)
+        val title = when {
+            pct >= 92 && cov >= 90 -> "Cercle de compas"
+            pct >= 75 && cov >= 66 -> "Arc de précision"
+            cov < 50 -> "Triangle suspect"
+            else -> "Patate ovale"
+        }
+        return "$title ($pct% | $cov% 360°)"
+    }
+
+    private fun driftDramaMessage(): String {
+        return when {
+            driftEvents == 0 -> "Drift-o-mètre : Calme plat – aucun esprit dans le stick."
+            driftEvents < 25 -> "Drift-o-mètre : Légère vibration – ton stick fait des étirements."
+            driftEvents < 80 -> "Drift-o-mètre : Alerte fantôme – ton stick vie sa propre vie !"
+            else -> "Drift-o-mètre : Déviation intersidérale détectée !"
+        }
+    }
+
+    private fun mashTitle(cps: Double): String {
+        return when {
+            cps >= 11.0 -> "Doigt en feu"
+            cps >= 7.0 -> "Touche qui supplie de l'arrêter"
+            cps >= 4.0 -> "Cadence arcade"
+            else -> "Pression tranquille"
+        }
+    }
+
+    private fun calibrer() {
+        if (isCalibrating) return
+        isCalibrating = true
+        calibSamplesLX.clear()
+        calibSamplesLY.clear()
+        calibSamplesRX.clear()
+        calibSamplesRY.clear()
+        Toast.makeText(this, "Ne touche pas aux sticks (0,4 s)...", Toast.LENGTH_SHORT).show()
+        gameHandler.removeCallbacks(calibSampleRunnable)
+        gameHandler.post(calibSampleRunnable)
+    }
+
+    private fun reinitialiser() {
+        gameHandler.removeCallbacks(calibSampleRunnable)
+        isCalibrating = false
+        offLX = 0f
+        offLY = 0f
+        offRX = 0f
+        offRY = 0f
+        dzL = 10
+        dzR = 10
+        stickCurveMode = "PRECIS"
+        invertLookY = false
+        hairTriggerEnabled = true
+        turboEnabled = false
+        saveActiveProfileOffsets()
+        prefs.edit()
+            .putInt("dzL", dzL).putInt("dzR", dzR)
+            .putString("stickCurve", stickCurveMode)
+            .putBoolean("invertLookY", invertLookY)
+            .putBoolean("hairTrigger", hairTriggerEnabled).apply()
+        seekL.progress = dzL
+        seekR.progress = dzR
+        labelL.text = "Zone morte gauche : $dzL %"
+        labelR.text = "Zone morte droite : $dzR %"
+        logEvent("Réinitialisation réglages")
+        Toast.makeText(this, "Réglages réinitialisés", Toast.LENGTH_SHORT).show()
+        refresh()
+    }
+
+    private fun pulseVibrator(vibrator: Vibrator?): Boolean {
+        if (vibrator == null || !vibrator.hasVibrator()) return false
+        return try {
+            if (Build.VERSION.SDK_INT >= 26) {
+                val amp = if (vibrator.hasAmplitudeControl()) vibAmplitude else VibrationEffect.DEFAULT_AMPLITUDE
+                vibrator.vibrate(VibrationEffect.createOneShot(vibDurationMs.toLong(), amp))
+            } else {
+                @Suppress("DEPRECATION")
+                vibrator.vibrate(vibDurationMs.toLong())
+            }
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun vibrer() {
+        if (!vibrationEnabled) {
+            Toast.makeText(this, "Vibration désactivée", Toast.LENGTH_SHORT).show()
+            return
+        }
+        var triggered = false
+        val d = gamepads().firstOrNull()
+        if (d != null) {
+            if (Build.VERSION.SDK_INT >= 31) {
+                try {
+                    val vm: VibratorManager? = d.vibratorManager
+                    val ids = vm?.vibratorIds
+                    if (ids != null && ids.isNotEmpty()) {
+                        for (id in ids) {
+                            if (pulseVibrator(vm.getVibrator(id))) triggered = true
+                        }
+                    }
+                    if (!triggered && pulseVibrator(vm?.defaultVibrator)) triggered = true
+                } catch (_: Exception) {
+                }
+            }
+            if (!triggered) {
+                @Suppress("DEPRECATION")
+                if (pulseVibrator(d.vibrator)) triggered = true
+            }
+        }
+
+        if (!triggered) {
+            val phoneVib: Vibrator? = if (Build.VERSION.SDK_INT >= 31) {
+                (getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)?.defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+            }
+            if (pulseVibrator(phoneVib)) {
+                triggered = true
+            }
+        }
+
+        if (!triggered) {
+            Toast.makeText(this, "Aucune vibration disponible", Toast.LENGTH_SHORT).show()
+        } else {
+            logEvent("VIBRATION ${vibDurationMs}ms")
+        }
+    }
+
+    private fun f(v: Float): String = String.format("%+.2f", v)
+
+    private fun refresh() {
+        val l = corriger(rawLX, rawLY, offLX, offLY, dzL)
+        val r = corriger(rawRX, rawRY, offRX, offRY, dzR)
+
+        if (::heroPadPreview.isInitialized) {
+            heroPadPreview.updateSticks(l.first, l.second, r.first, r.second)
+        }
+
+        if (!::liveText.isInitialized) return
+        val magL = hypot(l.first.toDouble(), l.second.toDouble()).toFloat()
+        val magR = hypot(r.first.toDouble(), r.second.toDouble()).toFloat()
+
+        val sb = StringBuilder()
+        sb.append("JOYSTICK GAUCHE\n")
+        sb.append("  brut    X ").append(f(rawLX)).append("  Y ").append(f(rawLY)).append("\n")
+        sb.append("  offset  X ").append(f(offLX)).append("  Y ").append(f(offLY)).append("\n")
+        sb.append("  corrigé X ").append(f(l.first)).append("  Y ").append(f(l.second))
+        sb.append(" (").append((magL * 100f).toInt()).append("%)\n\n")
+
+        sb.append("JOYSTICK DROIT\n")
+        sb.append("  brut    X ").append(f(rawRX)).append("  Y ").append(f(rawRY)).append("\n")
+        sb.append("  offset  X ").append(f(offRX)).append("  Y ").append(f(offRY)).append("\n")
+        sb.append("  corrigé X ").append(f(r.first)).append("  Y ").append(f(r.second))
+        sb.append(" (").append((magR * 100f).toInt()).append("%)\n\n")
+
+        sb.append("GÂCHETTES  L ").append(f(trigL)).append("  R ").append(f(trigR)).append("\n")
+        sb.append("CROIX      X ").append(f(hatX)).append("  Y ").append(f(hatY)).append("\n")
+        sb.append("LATENCE    ").append(lastLatencyMs).append(" ms | FANTÔMES ").append(ghostInputCount).append("\n\n")
+        sb.append("BOUTONS : ")
+        sb.append(if (pressed.isEmpty()) "-" else pressed.joinToString(", "))
+        liveText.text = sb.toString()
+
+        if (::barTrigL.isInitialized) barTrigL.progress = (trigL * 100f).toInt()
+        if (::barTrigR.isInitialized) barTrigR.progress = (trigR * 100f).toInt()
+        if (::trigDiagText.isInitialized) {
+            val pctL = (maxTrigL * 100f).toInt()
+            val pctR = (maxTrigR * 100f).toInt()
+            val lazyL = if (maxTrigL > 0.05f && pctL < 90) "L paresseuse à $pctL%" else "L max $pctL%"
+            val lazyR = if (maxTrigR > 0.05f && pctR < 90) "R paresseuse à $pctR%" else "R max $pctR%"
+            trigDiagText.text = "$lazyL | $lazyR"
+        }
+
+        if (::eventLogText.isInitialized) {
+            eventLogText.text = if (eventLog.isEmpty()) "Aucun événement" else eventLog.reversed().joinToString("\n")
+        }
+
+        if (::radarView.isInitialized) {
+            radarView.updateData(
+                rawLX, rawLY, l.first, l.second, dzL,
+                rawRX, rawRY, r.first, r.second, dzR
+            )
+        }
+
+        if (::driftSummaryText.isInitialized) {
+            val smoothness = if (jitterSamples > 0) {
+                max(0, 100 - ((jitterAccumulator / jitterSamples) * 120f).toInt())
+            } else 100
+            val dSb = StringBuilder()
+            dSb.append("GAUCHE : ").append(placementStatus(l.first, l.second, dzL)).append("\n")
+            dSb.append("  Rang : ").append(circleRank(maxCircL, sectorsHitL)).append("\n")
+            dSb.append("  Régularité : ").append(smoothness).append("%\n")
+            dSb.append("DROIT  : ").append(placementStatus(r.first, r.second, dzR)).append("\n")
+            dSb.append("  Rang : ").append(circleRank(maxCircR, sectorsHitR)).append("\n")
+            dSb.append("SNAPBACKS : ").append(snapbackCount).append("\n")
+            dSb.append("A : ").append(snapshotPadA).append("\n")
+            dSb.append("B : ").append(snapshotPadB)
+            driftSummaryText.text = dSb.toString()
+        }
+
+        if (::calibStatusText.isInitialized) {
+            calibStatusText.text =
+                "Profil : $activePresetName ($stickCurveMode)\n" +
+                    "Offset G (${f(offLX)}, ${f(offLY)}) | Offset D (${f(offRX)}, ${f(offRY)})\n" +
+                    "Zones mortes : G $dzL% / D $dzR% | Turbo : ${if (turboEnabled) "ON" else "OFF"}"
+        }
+
+        if (::funStatsText.isInitialized) {
+            val now = System.currentTimeMillis()
+            while (pressTimestamps.isNotEmpty() && now - pressTimestamps.first() > 1000L) {
+                pressTimestamps.removeFirst()
+            }
+            val cps = pressTimestamps.size.toDouble()
+            val fSb = StringBuilder()
+            fSb.append(driftDramaMessage()).append("\n\n")
+            fSb.append("Mash actuel : ").append(String.format("%.1f/s", cps))
+            fSb.append(" (Record ").append(String.format("%.1f/s", peakCps)).append(")\n")
+            fSb.append("Titre : ").append(mashTitle(max(cps, peakCps)))
+            funStatsText.text = fSb.toString()
+        }
+    }
+
+    private inner class SmokeBackdropView(context: Context) : View(context) {
+        private val basePaint = Paint().apply {
+            color = if (ecoDarkMode) Color.BLACK else bgObsidian
+            style = Paint.Style.FILL
+        }
+
+        private val topSmokePaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val midSmokePaint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+        override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+            super.onSizeChanged(w, h, oldw, oldh)
+            if (w <= 0 || h <= 0) return
+            val alphaTop = if (ecoDarkMode) 28 else 125
+            val alphaMid = if (ecoDarkMode) 20 else 110
+            topSmokePaint.shader = RadialGradient(
+                w * 0.72f,
+                h * 0.08f,
+                max(w, h) * 0.65f,
+                intArrayOf(Color.argb(alphaTop, 195, 22, 42), Color.argb(45, 70, 8, 18), Color.TRANSPARENT),
+                floatArrayOf(0f, 0.5f, 1f),
+                Shader.TileMode.CLAMP
+            )
+            midSmokePaint.shader = RadialGradient(
+                w * 0.28f,
+                h * 0.42f,
+                max(w, h) * 0.55f,
+                intArrayOf(Color.argb(alphaMid, 165, 16, 36), Color.argb(30, 50, 6, 14), Color.TRANSPARENT),
+                floatArrayOf(0f, 0.55f, 1f),
+                Shader.TileMode.CLAMP
+            )
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), basePaint)
+            canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), topSmokePaint)
+            canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), midSmokePaint)
+        }
+    }
+
+    private inner class ControllerHeroView(context: Context) : View(context) {
+        private var lx = 0f
+        private var ly = 0f
+        private var rx = 0f
+        private var ry = 0f
+        private var glowColor = crimsonGlow
+        private val customLogoBitmap: Bitmap? = (findLogoDrawable() as? BitmapDrawable)?.bitmap
+
+        private val bodyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+        }
+
+        private val rimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = dp(2).toFloat()
+        }
+
+        private val lightBarPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = dp(3).toFloat()
+            strokeCap = Paint.Cap.ROUND
+        }
+
+        private val detailPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.argb(135, 210, 215, 230)
+            style = Paint.Style.STROKE
+            strokeWidth = dp(2).toFloat()
+        }
+
+        private val stickWellPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.parseColor("#0A0A0E")
+            style = Paint.Style.FILL
+        }
+
+        private val stickCapPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.parseColor("#252732")
+            style = Paint.Style.FILL
+        }
+
+        private val logoBitmapPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+        fun setGlowColor(col: Int) {
+            glowColor = col
+            invalidate()
+        }
+
+        fun updateSticks(leftX: Float, leftY: Float, rightX: Float, rightY: Float) {
+            lx = leftX.coerceIn(-1f, 1f)
+            ly = leftY.coerceIn(-1f, 1f)
+            rx = rightX.coerceIn(-1f, 1f)
+            ry = rightY.coerceIn(-1f, 1f)
+            invalidate()
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            val w = width.toFloat()
+            val h = height.toFloat()
+            if (w <= 0f || h <= 0f) return
+
+            if (customLogoBitmap != null && !customLogoBitmap.isRecycled) {
+                val side = min(w * 0.62f, h * 0.94f)
+                val dst = RectF((w - side) / 2f, (h - side) / 2f, (w + side) / 2f, (h + side) / 2f)
+                canvas.drawBitmap(customLogoBitmap, null, dst, logoBitmapPaint)
+                return
+            }
+
+            val cx = w / 2f
+            val cy = h * 0.54f
+            val scale = min(w / 320f, h / 160f)
+
+            bodyPaint.shader = LinearGradient(
+                cx, cy - 55f * scale, cx, cy + 65f * scale,
+                intArrayOf(Color.parseColor("#2A2C36"), Color.parseColor("#121318"), Color.parseColor("#090A0D")),
+                null,
+                Shader.TileMode.CLAMP
+            )
+            rimPaint.color = Color.argb(120, Color.red(glowColor), Color.green(glowColor), Color.blue(glowColor))
+            lightBarPaint.color = glowColor
+
+            val shellPath = Path().apply {
+                moveTo(cx - 58f * scale, cy - 36f * scale)
+                cubicTo(cx - 96f * scale, cy - 36f * scale, cx - 114f * scale, cy + 28f * scale, cx - 102f * scale, cy + 56f * scale)
+                cubicTo(cx - 92f * scale, cy + 72f * scale, cx - 72f * scale, cy + 64f * scale, cx - 54f * scale, cy + 24f * scale)
+                lineTo(cx + 54f * scale, cy + 24f * scale)
+                cubicTo(cx + 72f * scale, cy + 64f * scale, cx + 92f * scale, cy + 72f * scale, cx + 102f * scale, cy + 56f * scale)
+                cubicTo(cx + 114f * scale, cy + 28f * scale, cx + 96f * scale, cy - 36f * scale, cx + 58f * scale, cy - 36f * scale)
+                close()
+            }
+            canvas.drawPath(shellPath, bodyPaint)
+            canvas.drawPath(shellPath, rimPaint)
+
+            val padRect = RectF(cx - 28f * scale, cy - 32f * scale, cx + 28f * scale, cy + 4f * scale)
+            canvas.drawRoundRect(padRect, 8f * scale, 8f * scale, stickWellPaint)
+            canvas.drawRoundRect(padRect, 8f * scale, 8f * scale, detailPaint)
+
+            val leftLight = Path().apply {
+                moveTo(cx - 34f * scale, cy - 28f * scale)
+                lineTo(cx - 24f * scale, cy + 10f * scale)
+            }
+            val rightLight = Path().apply {
+                moveTo(cx + 34f * scale, cy - 28f * scale)
+                lineTo(cx + 24f * scale, cy + 10f * scale)
+            }
+            canvas.drawPath(leftLight, lightBarPaint)
+            canvas.drawPath(rightLight, lightBarPaint)
+
+            val dpadCx = cx - 64f * scale
+            val dpadCy = cy - 6f * scale
+            canvas.drawRect(dpadCx - 13f * scale, dpadCy - 4f * scale, dpadCx + 13f * scale, dpadCy + 4f * scale, detailPaint)
+            canvas.drawRect(dpadCx - 4f * scale, dpadCy - 13f * scale, dpadCx + 4f * scale, dpadCy + 13f * scale, detailPaint)
+
+            val faceCx = cx + 64f * scale
+            val faceCy = cy - 6f * scale
+            val rBtn = 5.5f * scale
+            canvas.drawCircle(faceCx, faceCy - 12f * scale, rBtn, detailPaint)
+            canvas.drawCircle(faceCx, faceCy + 12f * scale, rBtn, detailPaint)
+            canvas.drawCircle(faceCx - 12f * scale, faceCy, rBtn, detailPaint)
+            canvas.drawCircle(faceCx + 12f * scale, faceCy, rBtn, detailPaint)
+
+            val lWellX = cx - 34f * scale
+            val lWellY = cy + 20f * scale
+            val rWellX = cx + 34f * scale
+            val rWellY = cy + 20f * scale
+            val wellR = 12f * scale
+
+            canvas.drawCircle(lWellX, lWellY, wellR, stickWellPaint)
+            canvas.drawCircle(lWellX, lWellY, wellR, detailPaint)
+            canvas.drawCircle(rWellX, rWellY, wellR, stickWellPaint)
+            canvas.drawCircle(rWellX, rWellY, wellR, detailPaint)
+
+            val capR = 7.5f * scale
+            canvas.drawCircle(lWellX + lx * 6f * scale, lWellY + ly * 6f * scale, capR, stickCapPaint)
+            canvas.drawCircle(lWellX + lx * 6f * scale, lWellY + ly * 6f * scale, capR, detailPaint)
+            canvas.drawCircle(rWellX + rx * 6f * scale, rWellY + ry * 6f * scale, capR, stickCapPaint)
+            canvas.drawCircle(rWellX + rx * 6f * scale, rWellY + ry * 6f * scale, capR, detailPaint)
+        }
+    }
+
+    private inner class CoD3DView(context: Context) : View(context) {
+        private var lastTouchX = 0f
+        private var lastTouchY = 0f
+        private var hasTouchDrag = false
+
+        private val skyPaint = Paint().apply { style = Paint.Style.FILL }
+        private val floorPaint = Paint().apply { style = Paint.Style.FILL }
+        private val wallPaint = Paint().apply { style = Paint.Style.FILL }
+        private val botPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+        private val botOutlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.BLACK
+            style = Paint.Style.STROKE
+            strokeWidth = dp(2).toFloat()
+        }
+        private val hudPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = iceCyan
+            style = Paint.Style.STROKE
+            strokeWidth = dp(2).toFloat()
+        }
+        private val feedPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = textPure
+            textSize = dp(10).toFloat()
+            typeface = Typeface.MONOSPACE
+        }
+        private val gunPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+        private val flashPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.argb(210, 255, 210, 90)
+            style = Paint.Style.FILL
+        }
+        private val overlayPaint = Paint().apply { style = Paint.Style.FILL }
+
+        override fun onTouchEvent(event: MotionEvent): Boolean {
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    lastTouchX = event.x
+                    lastTouchY = event.y
+                    hasTouchDrag = true
+                    return true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (hasTouchDrag) {
+                        val dx = event.x - lastTouchX
+                        val dy = event.y - lastTouchY
+                        lastTouchX = event.x
+                        lastTouchY = event.y
+                        val sens = if (isAdsEngaged()) 0.0045 else 0.0075
+                        playerAngle += dx * sens
+                        if (abs(dy) > 1.5f && !isWalkable(playerX, playerY)) {
+                            // garde
+                        }
+                        invalidate()
+                    }
+                    return true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    hasTouchDrag = false
+                    return true
+                }
+            }
+            return super.onTouchEvent(event)
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            val w = width.toFloat()
+            val h = height.toFloat()
+            if (w <= 20f || h <= 20f) return
+
+            val map = currentWorldMap()
+            val horizon = h * (if (crouchSlideActive) 0.56f else 0.5f)
+            skyPaint.shader = LinearGradient(
+                0f, 0f, 0f, horizon,
+                intArrayOf(Color.parseColor("#0B101D"), Color.parseColor("#26121A")),
+                null,
+                Shader.TileMode.CLAMP
+            )
+            floorPaint.shader = LinearGradient(
+                0f, horizon, 0f, h,
+                intArrayOf(Color.parseColor("#18151A"), Color.parseColor("#2E2A33")),
+                null,
+                Shader.TileMode.CLAMP
+            )
+            canvas.drawRect(0f, 0f, w, horizon, skyPaint)
+            canvas.drawRect(0f, horizon, w, h, floorPaint)
+
+            val rayCount = 96
+            val fovDeg = if (isAdsEngaged()) 44.0 else 66.0
+            val fov = Math.toRadians(fovDeg)
+            val sliceW = w / rayCount
+            val zBuffer = DoubleArray(rayCount) { 20.0 }
+
+            for (i in 0 until rayCount) {
+                val cameraX = (2.0 * i / rayCount) - 1.0
+                val rayAngle = playerAngle + atan2(cameraX * kotlin.math.tan(fov / 2.0), 1.0)
+                val rayDirX = cos(rayAngle)
+                val rayDirY = sin(rayAngle)
+
+                var mapX = playerX.toInt()
+                var mapY = playerY.toInt()
+
+                val deltaDistX = if (rayDirX == 0.0) 1e30 else abs(1.0 / rayDirX)
+                val deltaDistY = if (rayDirY == 0.0) 1e30 else abs(1.0 / rayDirY)
+
+                var stepX: Int
+                var sideDistX: Double
+                if (rayDirX < 0) {
+                    stepX = -1
+                    sideDistX = (playerX - mapX) * deltaDistX
+                } else {
+                    stepX = 1
+                    sideDistX = (mapX + 1.0 - playerX) * deltaDistX
+                }
+
+                var stepY: Int
+                var sideDistY: Double
+                if (rayDirY < 0) {
+                    stepY = -1
+                    sideDistY = (playerY - mapY) * deltaDistY
+                } else {
+                    stepY = 1
+                    sideDistY = (mapY + 1.0 - playerY) * deltaDistY
+                }
+
+                var hitType = 0
+                var side = 0
+                var guard = 0
+                while (hitType == 0 && guard < 40) {
+                    guard++
+                    if (sideDistX < sideDistY) {
+                        sideDistX += deltaDistX
+                        mapX += stepX
+                        side = 0
+                    } else {
+                        sideDistY += deltaDistY
+                        mapY += stepY
+                        side = 1
+                    }
+                    if (mapY !in map.indices || mapX !in map[0].indices) {
+                        hitType = 1
+                    } else if (map[mapY][mapX] > 0) {
+                        hitType = map[mapY][mapX]
+                    }
+                }
+
+                val perpWallDist = max(
+                    0.15,
+                    if (side == 0) (sideDistX - deltaDistX) else (sideDistY - deltaDistY)
+                )
+                zBuffer[i] = perpWallDist
+
+                val lineHeight = (h / perpWallDist).toFloat()
+                val drawStart = max(0f, horizon - lineHeight / 2f)
+                val drawEnd = min(h, horizon + lineHeight / 2f)
+
+                val shade = (1.0 / (1.0 + perpWallDist * 0.22)).toFloat().coerceIn(0.18f, 1.0f) *
+                    (if (side == 1) 0.78f else 1.0f)
+
+                val baseR = when (hitType) {
+                    2 -> 175
+                    3 -> 75
+                    else -> 115
+                }
+                val baseG = when (hitType) {
+                    2 -> 42
+                    3 -> 115
+                    else -> 122
+                }
+                val baseB = when (hitType) {
+                    2 -> 56
+                    3 -> 145
+                    else -> 136
+                }
+
+                wallPaint.color = Color.rgb(
+                    (baseR * shade).toInt(),
+                    (baseG * shade).toInt(),
+                    (baseB * shade).toInt()
+                )
+                canvas.drawRect(i * sliceW, drawStart, (i + 1) * sliceW + 0.8f, drawEnd, wallPaint)
+            }
+
+            val dirX = cos(playerAngle)
+            val dirY = sin(playerAngle)
+            val planeScale = kotlin.math.tan(fov / 2.0)
+            val planeX = -dirY * planeScale
+            val planeY = dirX * planeScale
+
+            val sortedBots = enemyBots.sortedByDescending { hypot(it.x - playerX, it.y - playerY) }
+            for (bot in sortedBots) {
+                val spriteX = bot.x - playerX
+                val spriteY = bot.y - playerY
+                val invDet = 1.0 / (planeX * dirY - dirX * planeY)
+                val transformX = invDet * (dirY * spriteX - dirX * spriteY)
+                val transformY = invDet * (-planeY * spriteX + planeX * spriteY)
+
+                if (transformY > 0.2) {
+                    val spriteScreenX = ((w / 2.0) * (1.0 + transformX / transformY)).toFloat()
+                    val spriteHeight = abs((h / transformY)).toFloat()
+                    val spriteWidth = spriteHeight * (if (bot.role == BotRole.TANK) 0.56f else 0.46f)
+                    val centerSlice = ((spriteScreenX / w) * rayCount).toInt()
+
+                    if (centerSlice in zBuffer.indices && transformY < zBuffer[centerSlice]) {
+                        val top = horizon - spriteHeight * 0.42f
+                        val bottom = horizon + spriteHeight * 0.5f
+
+                        botPaint.color = when (bot.role) {
+                            BotRole.TANK -> Color.parseColor("#3D2B36")
+                            BotRole.RUSHER -> Color.parseColor("#25363D")
+                            BotRole.SNIPER -> Color.parseColor("#2B313D")
+                        }
+                        val torso = RectF(
+                            spriteScreenX - spriteWidth * 0.5f,
+                            top + spriteHeight * 0.22f,
+                            spriteScreenX + spriteWidth * 0.5f,
+                            bottom
+                        )
+                        canvas.drawRoundRect(torso, dp(6).toFloat(), dp(6).toFloat(), botPaint)
+                        canvas.drawRoundRect(torso, dp(6).toFloat(), dp(6).toFloat(), botOutlinePaint)
+
+                        botPaint.color = Color.parseColor("#181B22")
+                        val headR = spriteWidth * 0.34f
+                        val headCy = top + spriteHeight * 0.14f
+                        canvas.drawCircle(spriteScreenX, headCy, headR, botPaint)
+                        canvas.drawCircle(spriteScreenX, headCy, headR, botOutlinePaint)
+
+                        botPaint.color = when (bot.role) {
+                            BotRole.RUSHER -> iceGold
+                            BotRole.SNIPER -> iceCyan
+                            BotRole.TANK -> crimsonGlow
+                        }
+                        canvas.drawRect(
+                            spriteScreenX - headR * 0.65f,
+                            headCy - headR * 0.2f,
+                            spriteScreenX + headR * 0.65f,
+                            headCy + headR * 0.2f,
+                            botPaint
+                        )
+
+                        val hpBarW = spriteWidth * 0.9f
+                        val hpRatio = (bot.hp.toFloat() / bot.maxHp.toFloat()).coerceIn(0f, 1f)
+                        botPaint.color = Color.DKGRAY
+                        canvas.drawRect(spriteScreenX - hpBarW / 2f, top - dp(10), spriteScreenX + hpBarW / 2f, top - dp(4), botPaint)
+                        botPaint.color = crimsonGlow
+                        canvas.drawRect(spriteScreenX - hpBarW / 2f, top - dp(10), spriteScreenX - hpBarW / 2f + hpBarW * hpRatio, top - dp(4), botPaint)
+                    }
+                }
+            }
+
+            val cx = w / 2f
+            val cy = h / 2f
+            val now = System.currentTimeMillis()
+            hudPaint.color = when {
+                now < headshotMarkerUntil -> iceGold
+                now < hitMarkerUntil -> crimsonGlow
+                else -> iceCyan
+            }
+            val gap = if (isAdsEngaged()) dp(4).toFloat() else dp(7).toFloat()
+            val arm = if (isAdsEngaged()) dp(10).toFloat() else dp(14).toFloat()
+            canvas.drawLine(cx - arm, cy, cx - gap, cy, hudPaint)
+            canvas.drawLine(cx + gap, cy, cx + arm, cy, hudPaint)
+            canvas.drawLine(cx, cy - arm, cx, cy - gap, hudPaint)
+            canvas.drawLine(cx, cy + gap, cx, cy + arm, hudPaint)
+
+            val nearestBot = enemyBots.minByOrNull { hypot(it.x - playerX, it.y - playerY) }
+            if (nearestBot != null) {
+                val relAngle = atan2(nearestBot.y - playerY, nearestBot.x - playerX) - playerAngle
+                val indR = dp(34).toFloat()
+                val ix = cx + cos(relAngle).toFloat() * indR
+                val iy = cy + sin(relAngle).toFloat() * indR
+                botPaint.color = crimsonGlow
+                canvas.drawCircle(ix, iy, dp(3).toFloat(), botPaint)
+            }
+
+            var feedY = dp(16).toFloat()
+            for (line in killFeed.reversed()) {
+                canvas.drawText(line, w - dp(155), feedY, feedPaint)
+                feedY += dp(13).toFloat()
+            }
+
+            val adsShiftX = if (isAdsEngaged()) -w * 0.14f else 0f
+            val adsShiftY = if (isAdsEngaged()) -h * 0.06f else 0f
+            val kickY = weaponRecoil * dp(18).toFloat() + adsShiftY
+            val kickX = weaponRecoil * dp(8).toFloat() + adsShiftX
+            if (now < muzzleFlashUntil) {
+                canvas.drawCircle(w * 0.68f + kickX, h * 0.68f + kickY, dp(26).toFloat(), flashPaint)
+            }
+
+            gunPaint.color = if (weaponOverheated || isReloading) Color.parseColor("#5C1822") else Color.parseColor("#181B24")
+            val barrel = Path().apply {
+                moveTo(w * 0.64f + kickX, h * 0.67f + kickY)
+                lineTo(w * 0.72f + kickX, h * 0.67f + kickY)
+                lineTo(w * 0.86f + kickX, h)
+                lineTo(w * 0.56f + kickX, h)
+                close()
+            }
+            canvas.drawPath(barrel, gunPaint)
+
+            gunPaint.color = if (weaponOverheated) iceGold else crimsonGlow
+            canvas.drawRect(
+                w * 0.665f + kickX,
+                h * 0.69f + kickY,
+                w * 0.695f + kickX,
+                h * 0.76f + kickY,
+                gunPaint
+            )
+
+            drawMiniMap(canvas)
+
+            if (now < damageFlashUntil) {
+                overlayPaint.color = Color.argb(95, 255, 25, 45)
+                canvas.drawRect(0f, 0f, w, h, overlayPaint)
+            } else if (now < slowMoUntil) {
+                overlayPaint.color = Color.argb(42, 76, 232, 255)
+                canvas.drawRect(0f, 0f, w, h, overlayPaint)
+            } else if (playerHealth in 1..25) {
+                val pulse = ((sin(now * 0.012) + 1.0) * 28.0).toInt()
+                overlayPaint.color = Color.argb(pulse.coerceIn(10, 65), 255, 20, 40)
+                canvas.drawRect(0f, 0f, w, h, overlayPaint)
+            }
+        }
+
+        private fun drawMiniMap(canvas: Canvas) {
+            val map = currentWorldMap()
+            val cell = dp(8).toFloat()
+            val ox = dp(10).toFloat()
+            val oy = dp(10).toFloat()
+            val mapPaint = Paint().apply { style = Paint.Style.FILL }
+
+            for (r in map.indices) {
+                for (c in map[0].indices) {
+                    mapPaint.color = if (map[r][c] > 0) Color.argb(190, 90, 95, 110) else Color.argb(130, 15, 18, 26)
+                    canvas.drawRect(ox + c * cell, oy + r * cell, ox + (c + 1) * cell, oy + (r + 1) * cell, mapPaint)
+                }
+            }
+
+            mapPaint.color = mintOnline
+            for (kit in medKits) {
+                if (kit.active) {
+                    canvas.drawRect(
+                        ox + (kit.x * cell).toFloat() - dp(2),
+                        oy + (kit.y * cell).toFloat() - dp(2),
+                        ox + (kit.x * cell).toFloat() + dp(2),
+                        oy + (kit.y * cell).toFloat() + dp(2),
+                        mapPaint
+                    )
+                }
+            }
+
+            mapPaint.color = crimsonGlow
+            for (bot in enemyBots) {
+                canvas.drawCircle(ox + (bot.x * cell).toFloat(), oy + (bot.y * cell).toFloat(), dp(3).toFloat(), mapPaint)
+            }
+
+            val px = ox + (playerX * cell).toFloat()
+            val py = oy + (playerY * cell).toFloat()
+            mapPaint.color = mintOnline
+            canvas.drawCircle(px, py, dp(3).toFloat(), mapPaint)
+            hudPaint.color = mintOnline
+            canvas.drawLine(px, py, px + cos(playerAngle).toFloat() * dp(9), py + sin(playerAngle).toFloat() * dp(9), hudPaint)
+        }
+    }
+
+    private inner class JoystickRadarView(context: Context) : View(context) {
+        private var rLX = 0f
+        private var rLY = 0f
+        private var cLX = 0f
+        private var cLY = 0f
+        private var dzLPct = 10
+
+        private var rRX = 0f
+        private var rRY = 0f
+        private var cRX = 0f
+        private var cRY = 0f
+        private var dzRPct = 10
+
+        private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.parseColor("#472934")
+            style = Paint.Style.STROKE
+            strokeWidth = dp(1).toFloat()
+        }
+
+        private val crossPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.parseColor("#2B1720")
+            style = Paint.Style.STROKE
+            strokeWidth = dp(1).toFloat()
+            pathEffect = DashPathEffect(floatArrayOf(dp(4).toFloat(), dp(4).toFloat()), 0f)
+        }
+
+        private val dzPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.argb(45, 255, 201, 92)
+            style = Paint.Style.FILL
+        }
+
+        private val dzStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = iceGold
+            style = Paint.Style.STROKE
+            strokeWidth = dp(1).toFloat()
+        }
+
+        private val rawDotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = crimsonGlow
+            style = Paint.Style.FILL
+        }
+
+        private val corrDotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = iceCyan
+            style = Paint.Style.FILL
+        }
+
+        private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = textPure
+            textSize = dp(11).toFloat()
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        }
+
+        private val alertPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            textSize = dp(11).toFloat()
+            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+        }
+
+        fun updateData(
+            rawLeftX: Float, rawLeftY: Float, corrLeftX: Float, corrLeftY: Float, deadzoneLeft: Int,
+            rawRightX: Float, rawRightY: Float, corrRightX: Float, corrRightY: Float, deadzoneRight: Int
+        ) {
+            rLX = rawLeftX
+            rLY = rawLeftY
+            cLX = corrLeftX
+            cLY = corrLeftY
+            dzLPct = deadzoneLeft
+
+            rRX = rawRightX
+            rRY = rawRightY
+            cRX = corrRightX
+            cRY = corrRightY
+            dzRPct = deadzoneRight
+            invalidate()
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            val halfW = width / 2f
+            val pad = dp(10).toFloat()
+            val radius = min(halfW - pad * 1.5f, height - dp(54).toFloat()) / 2f
+            if (radius <= dp(12)) return
+
+            drawStick(canvas, halfW / 2f, pad + dp(16) + radius, radius, "STICK G", rLX, rLY, cLX, cLY, dzLPct)
+            drawStick(canvas, halfW + halfW / 2f, pad + dp(16) + radius, radius, "STICK D", rRX, rRY, cRX, cRY, dzRPct)
+        }
+
+        private fun drawStick(
+            canvas: Canvas,
+            cx: Float,
+            cy: Float,
+            radius: Float,
+            title: String,
+            rx: Float,
+            ry: Float,
+            px: Float,
+            py: Float,
+            dzPct: Int
+        ) {
+            canvas.drawText(title, cx - radius, cy - radius - dp(6), labelPaint)
+
+            canvas.drawCircle(cx, cy, radius, ringPaint)
+            canvas.drawLine(cx - radius, cy, cx + radius, cy, crossPaint)
+            canvas.drawLine(cx, cy - radius, cx, cy + radius, crossPaint)
+
+            val dzR = radius * (dzPct / 100f)
+            if (dzR > 0f) {
+                canvas.drawCircle(cx, cy, dzR, dzPaint)
+                canvas.drawCircle(cx, cy, dzR, dzStroke)
+            }
+
+            val rawX = cx + rx.coerceIn(-1f, 1f) * radius
+            val rawY = cy + ry.coerceIn(-1f, 1f) * radius
+            val corrX = cx + px.coerceIn(-1f, 1f) * radius
+            val corrY = cy + py.coerceIn(-1f, 1f) * radius
+
+            canvas.drawCircle(rawX, rawY, dp(5).toFloat(), rawDotPaint)
+            canvas.drawCircle(corrX, corrY, dp(6).toFloat(), corrDotPaint)
+
+            val corrDistPct = (hypot(px.toDouble(), py.toDouble()) * 100.0).toInt().coerceAtMost(100)
+            val rawDistPct = (hypot(rx.toDouble(), ry.toDouble()) * 100.0).toInt().coerceAtMost(100)
+            val calibratedOk = hypot(px.toDouble(), py.toDouble()) <= (dzPct / 100.0)
+            alertPaint.color = if (calibratedOk) mintOnline else crimsonGlow
+            val status = if (calibratedOk) {
+                "CALIBRÉ OK ($corrDistPct% | brut $rawDistPct%)"
+            } else {
+                "ACTIF ($corrDistPct% | brut $rawDistPct%)"
+            }
+            canvas.drawText(status, cx - radius, cy + radius + dp(16), alertPaint)
+        }
+    }
+}
